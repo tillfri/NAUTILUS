@@ -1,29 +1,21 @@
-import json
 import argparse
-import transformers
-from transformers import AutoProcessor
-import torch
+import re
 import sys
 from pathlib import Path
-import re
 from typing import List
+
+import torch
+from transformers import AutoProcessor
 
 project_root = Path(__file__).parent.parent
 sys.path.append(str(project_root))
 
 # from qwenvl.Nautilus_model.Qwen2_5_VL_Nautilus_ForConditionalGeneration import Qwen2_5_VL_Nautilus_ForConditionalGeneration
+
+from qwen_vl_utils import process_vision_info
 from qwenvl.nautilus_model.Qwen2_5_VL_Nautilus_ForConditionalGeneration import (
     Qwen2_5_VL_Nautilus_ForConditionalGeneration,
 )
-from peft import LoraConfig, LoraModel, PeftModel, TaskType, get_peft_model
-
-from qwen_vl_utils import process_vision_info
-from qwenvl.train.utils import (
-    find_all_linear_modules,
-    get_peft_state_maybe_zero_3,
-    get_peft_state_non_lora_maybe_zero_3,
-)
-from types import MethodType
 
 image_token_id = 151655
 
@@ -72,13 +64,17 @@ def double_image_tokens(inputs: dict, image_token_id: int) -> torch.Tensor:
             new_ids.append(token.item())
             new_mask.append(mask.item())
 
-    return torch.tensor(new_ids, dtype=input_ids.dtype, device=input_ids.device).unsqueeze(0), torch.tensor(
+    return torch.tensor(
+        new_ids, dtype=input_ids.dtype, device=input_ids.device
+    ).unsqueeze(0), torch.tensor(
         new_mask, dtype=attention_mask.dtype, device=attention_mask.device
     ).unsqueeze(0)
 
 
 argparse = argparse.ArgumentParser()
-argparse.add_argument("--checkpoint", type=str, help="Path to the checkpoint directory.")
+argparse.add_argument(
+    "--checkpoint", type=str, help="Path to the checkpoint directory."
+)
 argparse.add_argument("--image", type=str, help="Path to the image")
 argparse.add_argument("--prompt", type=str, help="Prompt", default="Describe the image")
 args = argparse.parse_args()
@@ -87,7 +83,11 @@ args = argparse.parse_args()
 # Load Model
 checkpoint = args.checkpoint
 model = Qwen2_5_VL_Nautilus_ForConditionalGeneration.from_pretrained(
-    checkpoint, cache_dir=None, attn_implementation="flash_attention_2", torch_dtype=torch.bfloat16, device_map="cuda:0"
+    checkpoint,
+    cache_dir=None,
+    attn_implementation="flash_attention_2",
+    torch_dtype=torch.bfloat16,
+    device_map="cuda:0",
 )
 
 # Set Min/Max Pixel Size
@@ -97,7 +97,9 @@ max_pixels = 1338 * 28 * 28
 # Use Base Model's Processor
 # Ensure that the checkpoint directory includes a preprocessor_config.json file,
 # consistent with the one from the Qwen2.5-VL variant. This configuration file is already provided in our checkpoint.
-processor = AutoProcessor.from_pretrained(checkpoint, min_pixels=min_pixels, max_pixels=max_pixels)
+processor = AutoProcessor.from_pretrained(
+    checkpoint, min_pixels=min_pixels, max_pixels=max_pixels
+)
 image_processor = processor.image_processor
 
 image_path = args.image
@@ -126,7 +128,9 @@ messages = [
 ]
 
 # Preprocess inputs
-text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+text = processor.apply_chat_template(
+    messages, tokenize=False, add_generation_prompt=True
+)
 image_inputs, video_inputs = process_vision_info(messages)
 inputs = processor(
     text=[text],
@@ -136,16 +140,19 @@ inputs = processor(
     return_tensors="pt",
 )
 
-inputs["input_ids"], inputs["attention_mask"] = double_image_tokens(inputs, image_token_id)
+inputs["input_ids"], inputs["attention_mask"] = double_image_tokens(
+    inputs, image_token_id
+)
 inputs = inputs.to(model.device)
 
 # infer
 generated_ids = model.generate(**inputs, max_new_tokens=2048)
-generated_ids_trimmed = [out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)]
-res_text = processor.batch_decode(generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)[
-    0
+generated_ids_trimmed = [
+    out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
 ]
+res_text = processor.batch_decode(
+    generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
+)[0]
 
 # Output
 print(res_text)
-
