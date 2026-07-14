@@ -1,34 +1,43 @@
-from cmath import isnan
-from heapq import merge
-from pyexpat import model
-from typing_extensions import Self
-from transformers import Qwen2_5_VLForConditionalGeneration, VisualBertConfig
-from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (Qwen2_5_VLCausalLMOutputWithPast,QWEN2_5_VL_INPUTS_DOCSTRING,_CONFIG_FOR_DOC,
-                                                                add_start_docstrings_to_model_forward,replace_return_docstrings,
-                                                                Qwen2_5_VisionTransformerPretrainedModel,)
+from typing import List, Optional, Tuple, Union
 
-from typing import Any, Dict, List, Optional, Tuple, Union
-from .Nautilus_layers import CrossAttentionNetwork, MLP, GlobalQueries 
-from .dinov2 import DINOv2
 import torch
+import torch.nn.functional as F
 from torch import nn
 from torch.nn import CrossEntropyLoss
+from transformers import Qwen2_5_VLForConditionalGeneration
+from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
+    _CONFIG_FOR_DOC,
+    QWEN2_5_VL_INPUTS_DOCSTRING,
+    Qwen2_5_VisionTransformerPretrainedModel,
+    Qwen2_5_VLCausalLMOutputWithPast,
+    add_start_docstrings_to_model_forward,
+    replace_return_docstrings,
+)
 
-import torch.nn.functional as F
+from .dinov2 import DINOv2
+from .Nautilus_layers import MLP, CrossAttentionNetwork, GlobalQueries
 
-class Qwen2_5_Nautilus_VisionTransformerPretrainedModel(Qwen2_5_VisionTransformerPretrainedModel):
+
+class Qwen2_5_Nautilus_VisionTransformerPretrainedModel(
+    Qwen2_5_VisionTransformerPretrainedModel
+):
     def __init__(self, config, *inputs, **kwargs) -> None:
         super().__init__(config, *inputs, **kwargs)
         self.nautilus_pool_layer = torch.nn.AdaptiveAvgPool2d(16)
         dino_vit_dim = 1024
         qwen_vit_dim = 1280
-        self.nautilus_w1_mlp = MLP(dino_vit_dim,[qwen_vit_dim],qwen_vit_dim)
-        self.nautilus_dark_mlp = MLP(qwen_vit_dim,[qwen_vit_dim],qwen_vit_dim)
+        self.nautilus_w1_mlp = MLP(dino_vit_dim, [qwen_vit_dim], qwen_vit_dim)
+        self.nautilus_dark_mlp = MLP(qwen_vit_dim, [qwen_vit_dim], qwen_vit_dim)
         self.nautilus_encoder = DINOv2("vitl")
-        self.nautilus_dark_attn = CrossAttentionNetwork(qwen_vit_dim,8)
-        self.nautilus_global_queries = GlobalQueries(nn.Parameter(torch.randn(1, 1, qwen_vit_dim)))
+        self.nautilus_dark_attn = CrossAttentionNetwork(qwen_vit_dim, 8)
+        self.nautilus_global_queries = GlobalQueries(
+            nn.Parameter(torch.randn(1, 1, qwen_vit_dim))
+        )
+
     # ehance forward
-    def forward(self, hidden_states: torch.Tensor, grid_thw: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, hidden_states: torch.Tensor, grid_thw: torch.Tensor
+    ) -> torch.Tensor:
         """
         Args:
             hidden_states (`torch.Tensor` of shape `(seq_len, hidden_size)`):
@@ -51,16 +60,22 @@ class Qwen2_5_Nautilus_VisionTransformerPretrainedModel(Qwen2_5_VisionTransforme
         cu_window_seqlens = torch.unique_consecutive(cu_window_seqlens)
 
         seq_len, _ = hidden_states.size()
-        hidden_states = hidden_states.reshape(seq_len // self.spatial_merge_unit, self.spatial_merge_unit, -1)
+        hidden_states = hidden_states.reshape(
+            seq_len // self.spatial_merge_unit, self.spatial_merge_unit, -1
+        )
         hidden_states = hidden_states[window_index, :, :]
         hidden_states = hidden_states.reshape(seq_len, -1)
-        rotary_pos_emb = rotary_pos_emb.reshape(seq_len // self.spatial_merge_unit, self.spatial_merge_unit, -1)
+        rotary_pos_emb = rotary_pos_emb.reshape(
+            seq_len // self.spatial_merge_unit, self.spatial_merge_unit, -1
+        )
         rotary_pos_emb = rotary_pos_emb[window_index, :, :]
         rotary_pos_emb = rotary_pos_emb.reshape(seq_len, -1)
         emb = torch.cat((rotary_pos_emb, rotary_pos_emb), dim=-1)
         position_embeddings = (emb.cos(), emb.sin())
 
-        cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2], grid_thw[:, 0]).cumsum(
+        cu_seqlens = torch.repeat_interleave(
+            grid_thw[:, 1] * grid_thw[:, 2], grid_thw[:, 0]
+        ).cumsum(
             dim=0,
             # Select dtype based on the following factors:
             #  - FA2 requires that cu_seqlens_q must have dtype int32
@@ -77,12 +92,22 @@ class Qwen2_5_Nautilus_VisionTransformerPretrainedModel(Qwen2_5_VisionTransforme
                 cu_seqlens_now = cu_window_seqlens
             if self.gradient_checkpointing and self.training:
                 hidden_states = self._gradient_checkpointing_func(
-                    blk.__call__, hidden_states, cu_seqlens_now, None, position_embeddings
+                    blk.__call__,
+                    hidden_states,
+                    cu_seqlens_now,
+                    None,
+                    position_embeddings,
                 )
             else:
-                hidden_states = blk(hidden_states, cu_seqlens=cu_seqlens_now, position_embeddings=position_embeddings)
+                hidden_states = blk(
+                    hidden_states,
+                    cu_seqlens=cu_seqlens_now,
+                    position_embeddings=position_embeddings,
+                )
 
-        ehanced_hidden_states = self.ehance_embeds(hidden_states, pixel_values, grid_thw, cu_seqlens, window_index)
+        ehanced_hidden_states = self.ehance_embeds(
+            hidden_states, pixel_values, grid_thw, cu_seqlens, window_index
+        )
 
         hidden_states = self.merger(hidden_states)
         reverse_indices = torch.argsort(window_index)
@@ -91,58 +116,76 @@ class Qwen2_5_Nautilus_VisionTransformerPretrainedModel(Qwen2_5_VisionTransforme
         ehanced_hidden_states = self.merger(ehanced_hidden_states)
         ehanced_hidden_states = ehanced_hidden_states[reverse_indices, :]
 
-        return torch.stack((hidden_states, ehanced_hidden_states), dim=1).reshape(-1, hidden_states.shape[1])
+        return torch.stack((hidden_states, ehanced_hidden_states), dim=1).reshape(
+            -1, hidden_states.shape[1]
+        )
 
-    def ehance_embeds(self, image_embeds, pixel_values, grid_thw, cu_seqlens, window_index):
-        '''
+    def ehance_embeds(
+        self, image_embeds, pixel_values, grid_thw, cu_seqlens, window_index
+    ):
+        """
         image_embeds: 经过qwen vit处理但seq“无序”tensor
         pixel_values: 原始图片pixel values经过Preprocess后的值，但reshape到了patch维度，有序
         grid_thw: grid info
         cu_seqlens: every sample seqlen in a batch
-        '''
+        """
         # remove copies
-        pixel_single_values = pixel_values.reshape(-1, 3, 2, 14, 14)[:,:,0,:,:].squeeze(2)
+        pixel_single_values = pixel_values.reshape(-1, 3, 2, 14, 14)[
+            :, :, 0, :, :
+        ].squeeze(2)
         pixel_image_list, nautilus_embeds_list = [], []
-        for idx,(grid_t,grid_h,grid_w) in zip(range(len(cu_seqlens) - 1),grid_thw):
-            pixel_image = pixel_single_values[cu_seqlens[idx]:cu_seqlens[idx+1]]
-            pixel_image = self.restore_image_from_patches(pixel_image,grid_h,grid_w)
-            nautilus_embeds = self.nautilus_encoder.get_intermediate_layers(pixel_image.unsqueeze(0), [23], return_class_token=False)[0]
+        for idx, (grid_t, grid_h, grid_w) in zip(range(len(cu_seqlens) - 1), grid_thw):
+            pixel_image = pixel_single_values[cu_seqlens[idx] : cu_seqlens[idx + 1]]
+            pixel_image = self.restore_image_from_patches(pixel_image, grid_h, grid_w)
+            nautilus_embeds = self.nautilus_encoder.get_intermediate_layers(
+                pixel_image.unsqueeze(0), [23], return_class_token=False
+            )[0]
             pixel_image_list.append(pixel_image)
             nautilus_embeds_list.append(nautilus_embeds.squeeze(0))
-        
+
         # shuffle nautilus_embeds pixel_image
         batch_nautilus_embeds = torch.cat(nautilus_embeds_list, dim=0)
         batch_pixel_image = pixel_single_values.mean(dim=(1, 2, 3))
 
-        seq_len,_ = batch_nautilus_embeds.shape
-        batch_nautilus_embeds = batch_nautilus_embeds.reshape(seq_len // self.spatial_merge_unit, self.spatial_merge_unit, -1)
+        seq_len, _ = batch_nautilus_embeds.shape
+        batch_nautilus_embeds = batch_nautilus_embeds.reshape(
+            seq_len // self.spatial_merge_unit, self.spatial_merge_unit, -1
+        )
         batch_nautilus_embeds = batch_nautilus_embeds[window_index, :, :]
         batch_nautilus_embeds = batch_nautilus_embeds.reshape(seq_len, -1)
 
-        batch_pixel_image = batch_pixel_image.reshape(seq_len // self.spatial_merge_unit, self.spatial_merge_unit, -1)
+        batch_pixel_image = batch_pixel_image.reshape(
+            seq_len // self.spatial_merge_unit, self.spatial_merge_unit, -1
+        )
         batch_pixel_image = batch_pixel_image[window_index, :, :]
         batch_pixel_image = batch_pixel_image.reshape(seq_len, -1).squeeze()
 
         weight_1 = self.nautilus_w1_mlp(batch_nautilus_embeds)
-        weight_2 = 1 / torch.exp(- weight_1)
+        weight_2 = 1 / torch.exp(-weight_1)
 
         # split batch
         filted_embeds_list = []
         for idx in range(len(cu_seqlens) - 1):
-            pixel_image = batch_pixel_image[cu_seqlens[idx]:cu_seqlens[idx+1]]
-            single_image_embeds = image_embeds[cu_seqlens[idx]:cu_seqlens[idx+1]]
+            pixel_image = batch_pixel_image[cu_seqlens[idx] : cu_seqlens[idx + 1]]
+            single_image_embeds = image_embeds[cu_seqlens[idx] : cu_seqlens[idx + 1]]
             min_index = torch.argmin(pixel_image)
-            dark_mask = torch.zeros(1,single_image_embeds.shape[0]).to(single_image_embeds.device)
-            dark_mask[0,min_index] = 1
+            dark_mask = torch.zeros(1, single_image_embeds.shape[0]).to(
+                single_image_embeds.device
+            )
+            dark_mask[0, min_index] = 1
             dark_mask = dark_mask.to(single_image_embeds.dtype)
             dark_embeds = dark_mask @ single_image_embeds
             # min_index_list.append(min_index)
 
             mean_featuers = torch.mean(single_image_embeds, dim=0).unsqueeze(0)
-            global_embeds = self.nautilus_dark_attn(self.nautilus_global_queries() + mean_featuers.unsqueeze(1),single_image_embeds.unsqueeze(1),single_image_embeds.unsqueeze(1))[0]            
+            global_embeds = self.nautilus_dark_attn(
+                self.nautilus_global_queries() + mean_featuers.unsqueeze(1),
+                single_image_embeds.unsqueeze(1),
+                single_image_embeds.unsqueeze(1),
+            )[0]
             dark_embeds = dark_embeds - global_embeds
             dark_embeds = self.nautilus_dark_mlp(dark_embeds.squeeze(1))
-            
+
             filted_embeds = single_image_embeds - dark_embeds
             filted_embeds_list.append(filted_embeds)
         batch_filted_embeds = torch.cat(filted_embeds_list, dim=0)
@@ -150,12 +193,14 @@ class Qwen2_5_Nautilus_VisionTransformerPretrainedModel(Qwen2_5_VisionTransforme
 
         return ehanced_hidden_states
 
-    
-    def restore_image_from_patches(self, patches: torch.Tensor, h_patches: int, w_patches: int) -> torch.Tensor:
-
+    def restore_image_from_patches(
+        self, patches: torch.Tensor, h_patches: int, w_patches: int
+    ) -> torch.Tensor:
 
         N, C, patch_size, _ = patches.shape
-        assert N == h_patches * w_patches, "patch not match，make sure that h_patches * w_patches == N"
+        assert N == h_patches * w_patches, (
+            "patch not match，make sure that h_patches * w_patches == N"
+        )
 
         patches = patches.view(h_patches, w_patches, C, patch_size, patch_size)
         patches = patches.permute(2, 0, 3, 1, 4).contiguous()
@@ -163,14 +208,17 @@ class Qwen2_5_Nautilus_VisionTransformerPretrainedModel(Qwen2_5_VisionTransforme
 
         return image
 
+
 class Qwen2_5_VL_Nautilus_ForConditionalGeneration(Qwen2_5_VLForConditionalGeneration):
     def __init__(self, config):
         super().__init__(config)
-        self.visual = Qwen2_5_Nautilus_VisionTransformerPretrainedModel._from_config(config.vision_config)
+        self.visual = Qwen2_5_Nautilus_VisionTransformerPretrainedModel._from_config(
+            config.vision_config
+        )
 
     def _init_weights(self, module):
         std = self.config.initializer_range
-        if isinstance(module, (nn.Linear, nn.Conv3d, nn.LayerNorm)): 
+        if isinstance(module, (nn.Linear, nn.Conv3d, nn.LayerNorm)):
             module.weight.data.normal_(mean=0.0, std=std)
             if module.bias is not None:
                 module.bias.data.zero_()
@@ -193,11 +241,12 @@ class Qwen2_5_VL_Nautilus_ForConditionalGeneration(Qwen2_5_VLForConditionalGener
                 self.visual.nautilus_dark_mlp.modules_to_save.default.weight_init()
                 self.visual.nautilus_dark_attn.modules_to_save.default.linear_init()
                 self.visual.nautilus_global_queries.modules_to_save.default.weight_init()
-        self.visual.nautilus_encoder.load_model(dino_path)     
-        
-    
+        self.visual.nautilus_encoder.load_model(dino_path)
+
     @add_start_docstrings_to_model_forward(QWEN2_5_VL_INPUTS_DOCSTRING)
-    @replace_return_docstrings(output_type=Qwen2_5_VLCausalLMOutputWithPast, config_class=_CONFIG_FOR_DOC)
+    @replace_return_docstrings(
+        output_type=Qwen2_5_VLCausalLMOutputWithPast, config_class=_CONFIG_FOR_DOC
+    )
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -257,11 +306,19 @@ class Qwen2_5_VL_Nautilus_ForConditionalGeneration(Qwen2_5_VLForConditionalGener
         "The image shows a street scene with a red stop sign in the foreground. In the background, there is a large red gate with Chinese characters ..."
         ```"""
 
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-        output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        output_attentions = (
+            output_attentions
+            if output_attentions is not None
+            else self.config.output_attentions
         )
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        output_hidden_states = (
+            output_hidden_states
+            if output_hidden_states is not None
+            else self.config.output_hidden_states
+        )
+        return_dict = (
+            return_dict if return_dict is not None else self.config.use_return_dict
+        )
 
         if inputs_embeds is None:
             inputs_embeds = self.model.embed_tokens(input_ids)
@@ -281,7 +338,9 @@ class Qwen2_5_VL_Nautilus_ForConditionalGeneration(Qwen2_5_VLForConditionalGener
                 mask_expanded = mask_unsqueezed.expand_as(inputs_embeds)
                 image_mask = mask_expanded.to(inputs_embeds.device)
 
-                image_embeds = image_embeds.to(inputs_embeds.device, inputs_embeds.dtype)
+                image_embeds = image_embeds.to(
+                    inputs_embeds.device, inputs_embeds.dtype
+                )
                 inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
 
             if pixel_values_videos is not None:
@@ -299,14 +358,18 @@ class Qwen2_5_VL_Nautilus_ForConditionalGeneration(Qwen2_5_VLForConditionalGener
                 mask_expanded = mask_unsqueezed.expand_as(inputs_embeds)
                 video_mask = mask_expanded.to(inputs_embeds.device)
 
-                video_embeds = video_embeds.to(inputs_embeds.device, inputs_embeds.dtype)
+                video_embeds = video_embeds.to(
+                    inputs_embeds.device, inputs_embeds.dtype
+                )
                 inputs_embeds = inputs_embeds.masked_scatter(video_mask, video_embeds)
 
             if attention_mask is not None:
                 attention_mask = attention_mask.to(inputs_embeds.device)
 
         # if we get 4D attention mask we cannot calculate rope deltas anymore. TODO @raushan fixme
-        if position_ids is None and (attention_mask is None or attention_mask.ndim == 2):
+        if position_ids is None and (
+            attention_mask is None or attention_mask.ndim == 2
+        ):
             # calculate RoPE index once per generation in the pre-fill stage only
             if (
                 (cache_position is not None and cache_position[0] == 0)
