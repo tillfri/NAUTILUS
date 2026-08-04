@@ -1,0 +1,537 @@
+{
+  "num_images_evaluated": 2935,
+  "num_images_gt_only_skipped": 0,
+  "num_images_pred_only_skipped": 0,
+  "num_images_missing_image_skipped": 0,
+  "num_images_missing_metadata": 0,
+  "class_agnostic": {
+    "mAP@0.5": 0.27300723622758954,
+    "mAP@0.5:0.95": 0.1361435092511241,
+    "Precision@0.5": 0.6156422379826635,
+    "Recall@0.5": 0.44345111394919823,
+    "F1@0.5": 0.515548956528912,
+    "TP@0.5": 3125,
+    "FP@0.5": 1951,
+    "FN@0.5": 3922
+  },
+  "class_aware": {
+    "mAP@0.5": 0.018999142315601562,
+    "mAP@0.5:0.95": 0.011178201541768278
+  },
+  "per_class": {
+    ".getfiles": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 2
+    },
+    ".objects": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 1
+    },
+    "2": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 2
+    },
+    "=\"% of the image": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 4
+    },
+    "=\"%20": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 1
+    },
+    "=obj": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 1
+    },
+    "a": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 1
+    },
+    "bbox": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 6
+    },
+    "bbox_2d": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 7
+    },
+    "black": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 1
+    },
+    "cell": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 1
+    },
+    "cellphone": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 4
+    },
+    "coin": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 1
+    },
+    "crab": {
+      "AP@0.5": 0.1377456223522763,
+      "AP@0.5:0.95": 0.06109416671726631,
+      "Precision@0.5": 0.4426512968299712,
+      "Recall@0.5": 0.31118314424635335,
+      "F1@0.5": 0.36545324768022847,
+      "support": 2468,
+      "num_pred": 1735
+    },
+    "crack": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 14
+    },
+    "cut": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 1
+    },
+    "cuttlefish": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 10
+    },
+    "diver": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 1
+    },
+    "fish": {
+      "AP@0.5": 0.14983791609821293,
+      "AP@0.5:0.95": 0.08097862879007849,
+      "Precision@0.5": 0.22199488491048594,
+      "Recall@0.5": 0.6749611197511665,
+      "F1@0.5": 0.334103156274057,
+      "support": 643,
+      "num_pred": 1955
+    },
+    "human": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 2
+    },
+    "ime": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 74
+    },
+    "ims bad": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 1
+    },
+    "imu": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 4
+    },
+    "jelly": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 85
+    },
+    "jellyfish": {
+      "AP@0.5": 0.019425019425019424,
+      "AP@0.5:0.95": 0.006216006216006216,
+      "Precision@0.5": 0.45454545454545453,
+      "Recall@0.5": 0.042735042735042736,
+      "F1@0.5": 0.078125,
+      "support": 117,
+      "num_pred": 11
+    },
+    "label": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 2
+    },
+    "nail": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 1
+    },
+    "objects": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 38
+    },
+    "plastic": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 1
+    },
+    "plate": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 1
+    },
+    "robots": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 3
+    },
+    "rust": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 1
+    },
+    "rusty": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 1
+    },
+    "scallop": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 21
+    },
+    "shrimp": {
+      "AP@0.5": 0.10052910052910052,
+      "AP@0.5:0.95": 0.04235588972431077,
+      "Precision@0.5": 0.7037037037037037,
+      "Recall@0.5": 0.14285714285714285,
+      "F1@0.5": 0.2375,
+      "support": 133,
+      "num_pred": 27
+    },
+    "small_fish": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 2113,
+      "num_pred": 0
+    },
+    "star": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 41
+    },
+    "starfish": {
+      "AP@0.5": 0.542419457375469,
+      "AP@0.5:0.95": 0.3682653856407522,
+      "Precision@0.5": 0.9274193548387096,
+      "Recall@0.5": 0.5848696757787667,
+      "F1@0.5": 0.7173489278752436,
+      "support": 1573,
+      "num_pred": 992
+    },
+    "turtle": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 2
+    },
+    "water": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 1
+    },
+    "xbf": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 1
+    },
+    "\u5199\u5b57": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 1
+    },
+    "\u53f7\u7801": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 2
+    },
+    "\u5b57\u5178": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 1
+    },
+    "\u5b57\u5e55": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 1
+    },
+    "\u5b57\u7b26\u4e32": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 2
+    },
+    "\u5e01": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 1
+    },
+    "\u7269\u4f53": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 7
+    },
+    "\ud840\udc87.paths": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 2
+    },
+    "\ud840\udc87\u5b50": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 1
+    }
+  },
+  "label_confusion_matrix_iou_0.3": {
+    "small_fish": {
+      "fish": 873,
+      "crab": 5,
+      "jelly": 2,
+      "jellyfish": 1,
+      "ime": 1
+    },
+    "fish": {
+      "fish": 448,
+      "scallop": 1,
+      "human": 1,
+      "ime": 1,
+      "=\"%20": 1,
+      ".objects": 1,
+      "\ud840\udc87.paths": 2,
+      "\ud840\udc87\u5b50": 1,
+      "jelly": 13,
+      "turtle": 2,
+      "plastic": 1
+    },
+    "crab": {
+      "crab": 854,
+      "fish": 19,
+      "scallop": 1,
+      "bbox_2d": 1,
+      "bbox": 1,
+      "objects": 8,
+      "jelly": 4,
+      "\u5b57\u5e55": 1,
+      "crack": 1
+    },
+    "starfish": {
+      "starfish": 927,
+      "fish": 70,
+      "crab": 18,
+      "=\"% of the image": 4,
+      "ime": 36,
+      "scallop": 15,
+      "imu": 4,
+      "robots": 3,
+      "star": 39
+    },
+    "shrimp": {
+      "shrimp": 23,
+      "fish": 25,
+      "diver": 1,
+      "crab": 1,
+      "jellyfish": 2
+    },
+    "jellyfish": {
+      "jelly": 51,
+      "jellyfish": 5,
+      "crab": 2,
+      "fish": 3,
+      "black": 1,
+      "shrimp": 1
+    }
+  },
+  "localization_only_iou_0.3": {
+    "matched": 3475,
+    "unmatched_gt": 3572,
+    "unmatched_pred": 1601
+  }
+}

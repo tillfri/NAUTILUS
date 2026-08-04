@@ -7,10 +7,14 @@ Given:
     `class_id cx cy w h` normalized to [0, 1]) — same format consumed by
     `visualize_detections.py`'s `load_yolo_gt()`,
   * a directory of raw NAUTILUS model-output text files (`<image_stem>.txt`, one per
-    image, produced by `batch_inference.py`'s `results/` folder), and
+    image, produced by `batch_inference.py`'s `results/` folder — passed as
+    `--pred-dir`), and
   * the `metadata.json` written alongside those results (holds per-image
     `input_width`/`input_height` needed to rescale predicted boxes from Qwen's
-    dynamically-resized model-input space back to original image space),
+    dynamically-resized model-input space back to original image space). This is
+    always located at `<pred-dir>/../metadata.json` (i.e. `--pred-dir` is expected to
+    be the `results/` directory, with `metadata.json` as its sibling) and no longer
+    needs to be passed explicitly,
 
 this script computes:
 
@@ -45,12 +49,20 @@ Matching algorithm:
 
 Usage:
     python evaluate_detections.py \
-        --gt-dir        /path/to/yolo_labels \
-        --pred-dir      /path/to/batch_inference_output/results \
-        --metadata-json /path/to/batch_inference_output/metadata.json \
-        --image-dir     /path/to/original/images \
-        --classes-file  /path/to/classes.txt \
-        --save-json     /path/to/metrics.json
+        --gt-dir       /path/to/yolo_labels \
+        --pred-dir     /path/to/batch_inference_output/results \
+        --image-dir    /path/to/original/images \
+        --classes-file /path/to/classes.txt \
+        --save-json    /path/to/metrics.json \
+        [--fishies]
+
+    `metadata.json` is always read from `<pred-dir>/../metadata.json`.
+
+    --fishies:
+        Optional flag (default: False). When set, the classes "fish" and
+        "small_fish" are treated as a single class (all "small_fish" labels, in
+        both ground truth and predictions, are merged into "fish") before any
+        metric is computed.
 """
 
 import argparse
@@ -139,12 +151,24 @@ def load_dataset(
     image_dims: dict,
     class_names: Optional[list],
     recursive: bool,
+    fishies: bool = False,
 ):
     """Build per-image {"gt": [...], "pred": [...]} records.
 
     Each box entry is {"bbox_2d": [x1,y1,x2,y2], "label": normalized_str}, in
     original image pixel space.
+
+    If `fishies` is True, any label equal to "small_fish" (after lower/strip
+    normalization) is remapped to "fish", so the two classes are treated as one
+    everywhere downstream.
     """
+
+    def _normalize_label(label: str) -> str:
+        label = str(label).strip().lower()
+        if fishies and label == "small_fish":
+            label = "fish"
+        return label
+
     gt_stems = {p.stem for p in gt_dir.glob("*.txt")}
     pred_stems = {p.stem for p in pred_dir.glob("*.txt")}
 
@@ -173,7 +197,7 @@ def load_dataset(
         gt_path = gt_dir / f"{stem}.txt"
         gt_dets = load_yolo_gt(gt_path, ori_w, ori_h, class_names)
         for det in gt_dets:
-            det["label"] = str(det["label"]).strip().lower()
+            det["label"] = _normalize_label(det["label"])
 
         dims = image_dims.get(image_path.name)
         if dims is None:
@@ -193,7 +217,7 @@ def load_dataset(
         inv_scale_h = ori_h / dims["input_height"]
         for det in pred_dets:
             det["bbox_2d"] = rescale_bbox(det["bbox_2d"], inv_scale_w, inv_scale_h)
-            det["label"] = str(det.get("label", "object")).strip().lower()
+            det["label"] = _normalize_label(det.get("label", "object"))
 
         dataset[stem] = {"gt": gt_dets, "pred": pred_dets}
 
@@ -428,12 +452,8 @@ def main():
     parser.add_argument(
         "--pred-dir", required=True,
         help="Directory of raw NAUTILUS result .txt files (<image_stem>.txt), e.g. "
-             "<batch_inference output-dir>/results.",
-    )
-    parser.add_argument(
-        "--metadata-json", required=True,
-        help="Path to metadata.json produced by batch_inference.py (image_dims with "
-             "input_width/input_height per image, used to rescale predicted bboxes).",
+             "<batch_inference output-dir>/results. metadata.json is always read "
+             "from <pred-dir>/../metadata.json.",
     )
     parser.add_argument(
         "--image-dir", required=True,
@@ -453,19 +473,28 @@ def main():
         "--recursive", action="store_true",
         help="Search --image-dir recursively.",
     )
+    parser.add_argument(
+        "--fishies", action="store_true", default=False,
+        help="Treat the classes 'fish' and 'small_fish' as a single class "
+             "(all 'small_fish' labels are merged into 'fish'). Default: False.",
+    )
     args = parser.parse_args()
 
     gt_dir = Path(args.gt_dir)
     pred_dir = Path(args.pred_dir)
     image_dir = Path(args.image_dir)
-    metadata_path = Path(args.metadata_json)
+    metadata_path = pred_dir.parent / "metadata.json"
 
     for label, p in [("Ground-truth", gt_dir), ("Prediction", pred_dir), ("Image", image_dir)]:
         if not p.exists():
             print(f"[error] {label} directory not found: {p}", file=sys.stderr)
             sys.exit(1)
     if not metadata_path.exists():
-        print(f"[error] metadata.json not found: {metadata_path}", file=sys.stderr)
+        print(
+            f"[error] metadata.json not found: {metadata_path} "
+            f"(expected as a sibling of --pred-dir, i.e. <pred-dir>/../metadata.json)",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     class_names = [
@@ -479,7 +508,7 @@ def main():
         print(f"[warning] metadata.json at {metadata_path} has no 'image_dims' entries", file=sys.stderr)
 
     dataset, load_stats = load_dataset(
-        gt_dir, pred_dir, image_dir, image_dims, class_names, args.recursive
+        gt_dir, pred_dir, image_dir, image_dims, class_names, args.recursive, args.fishies
     )
 
     if not dataset:
