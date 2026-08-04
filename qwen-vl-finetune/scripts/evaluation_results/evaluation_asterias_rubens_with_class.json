@@ -1,0 +1,51 @@
+{
+  "num_images_evaluated": 922,
+  "num_images_gt_only_skipped": 0,
+  "num_images_pred_only_skipped": 0,
+  "num_images_missing_image_skipped": 0,
+  "num_images_missing_metadata": 0,
+  "class_agnostic": {
+    "mAP@0.5": 0.4278873802215202,
+    "mAP@0.5:0.95": 0.14689490862106308,
+    "Precision@0.5": 0.6484674329501916,
+    "Recall@0.5": 0.6598440545808967,
+    "F1@0.5": 0.6541062801932368,
+    "TP@0.5": 677,
+    "FP@0.5": 367,
+    "FN@0.5": 349
+  },
+  "class_aware": {
+    "mAP@0.5": 0.21456024253182857,
+    "mAP@0.5:0.95": 0.0736591184439913
+  },
+  "per_class": {
+    "crab": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 0,
+      "num_pred": 3
+    },
+    "starfish": {
+      "AP@0.5": 0.42912048506365713,
+      "AP@0.5:0.95": 0.1473182368879826,
+      "Precision@0.5": 0.6503362151777138,
+      "Recall@0.5": 0.6598440545808967,
+      "F1@0.5": 0.6550556361877117,
+      "support": 1026,
+      "num_pred": 1041
+    }
+  },
+  "label_confusion_matrix_iou_0.3": {
+    "starfish": {
+      "starfish": 778
+    }
+  },
+  "localization_only_iou_0.3": {
+    "matched": 778,
+    "unmatched_gt": 248,
+    "unmatched_pred": 266
+  }
+}
