@@ -178,7 +178,16 @@ def find_image_for_stem(image_dir: Path, stem: str, recursive: bool) -> Optional
     return candidates[0] if candidates else None
 
 
-def _draw_panel(ax, img_array, detections: list, title: str, label_map: dict) -> None:
+def _draw_panel(
+    ax, img_array, detections: list, title: str, label_map: dict, text_field: str = "label"
+) -> None:
+    """Draw an image plus its detection boxes on one axis.
+
+    `text_field` selects which key of each detection dict is rendered as the box
+    caption. Colours and the legend always stay keyed on "label", so a caller can
+    pass e.g. a "display" field carrying extra info (IoU, score) without splitting
+    one class into several colours.
+    """
     ax.imshow(img_array)
     ax.axis("off")
     ax.set_title(title, fontsize=13, fontweight="bold")
@@ -210,7 +219,7 @@ def _draw_panel(ax, img_array, detections: list, title: str, label_map: dict) ->
 
         ax.text(
             x1, y1 - 4,
-            str(label),
+            str(det.get(text_field, label)),
             fontsize=10,
             fontweight="bold",
             color="white",
