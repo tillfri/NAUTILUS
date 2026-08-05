@@ -211,13 +211,21 @@ def load_dataset(
             continue
 
         raw_text = (pred_dir / f"{stem}.txt").read_text()
-        pred_dets = extract_detections_from_text(raw_text)
+        raw_pred_dets = extract_detections_from_text(raw_text)
 
+        # A detection with no "label" key means the model declined to assign this box
+        # to any class (seen in "return null if not present" prompts, where the model
+        # still emits a bbox_2d but omits the label instead of returning nothing) —
+        # treat it as no detection rather than falling back to a placeholder label.
         inv_scale_w = ori_w / dims["input_width"]
         inv_scale_h = ori_h / dims["input_height"]
-        for det in pred_dets:
+        pred_dets = []
+        for det in raw_pred_dets:
+            if "label" not in det:
+                continue
             det["bbox_2d"] = rescale_bbox(det["bbox_2d"], inv_scale_w, inv_scale_h)
-            det["label"] = _normalize_label(det.get("label", "object"))
+            det["label"] = _normalize_label(det["label"])
+            pred_dets.append(det)
 
         dataset[stem] = {"gt": gt_dets, "pred": pred_dets}
 

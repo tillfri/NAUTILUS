@@ -1,0 +1,94 @@
+{
+  "num_images_evaluated": 2935,
+  "num_images_gt_only_skipped": 0,
+  "num_images_pred_only_skipped": 0,
+  "num_images_missing_image_skipped": 0,
+  "num_images_missing_metadata": 0,
+  "class_agnostic": {
+    "mAP@0.5": 0.029547427376290722,
+    "mAP@0.5:0.95": 0.019486855949180346,
+    "Precision@0.5": 0.9684684684684685,
+    "Recall@0.5": 0.03050943663970484,
+    "F1@0.5": 0.05915531710001375,
+    "TP@0.5": 215,
+    "FP@0.5": 7,
+    "FN@0.5": 6832
+  },
+  "class_aware": {
+    "mAP@0.5": 0.017338726233069698,
+    "mAP@0.5:0.95": 0.01185805328568231
+  },
+  "per_class": {
+    "crab": {
+      "AP@0.5": 0.0008103727714748784,
+      "AP@0.5:0.95": 0.00016207455429497565,
+      "Precision@0.5": 1.0,
+      "Recall@0.5": 0.0008103727714748784,
+      "F1@0.5": 0.001619433198380567,
+      "support": 2468,
+      "num_pred": 2
+    },
+    "fish": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 643,
+      "num_pred": 0
+    },
+    "jellyfish": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 117,
+      "num_pred": 0
+    },
+    "shrimp": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 133,
+      "num_pred": 0
+    },
+    "small_fish": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 2113,
+      "num_pred": 0
+    },
+    "starfish": {
+      "AP@0.5": 0.1032219846269433,
+      "AP@0.5:0.95": 0.07098624515979889,
+      "Precision@0.5": 0.8590909090909091,
+      "Recall@0.5": 0.12015257469802924,
+      "F1@0.5": 0.21081985499163414,
+      "support": 1573,
+      "num_pred": 220
+    }
+  },
+  "label_confusion_matrix_iou_0.3": {
+    "fish": {
+      "starfish": 13
+    },
+    "starfish": {
+      "starfish": 190
+    },
+    "crab": {
+      "starfish": 13,
+      "crab": 2
+    }
+  },
+  "localization_only_iou_0.3": {
+    "matched": 218,
+    "unmatched_gt": 6829,
+    "unmatched_pred": 4
+  }
+}

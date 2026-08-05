@@ -1,0 +1,93 @@
+{
+  "num_images_evaluated": 2935,
+  "num_images_gt_only_skipped": 0,
+  "num_images_pred_only_skipped": 0,
+  "num_images_missing_image_skipped": 0,
+  "num_images_missing_metadata": 0,
+  "class_agnostic": {
+    "mAP@0.5": 0.0021369126620422543,
+    "mAP@0.5:0.95": 0.001565121578644229,
+    "Precision@0.5": 0.9411764705882353,
+    "Recall@0.5": 0.002270469703419895,
+    "F1@0.5": 0.004530011325028313,
+    "TP@0.5": 16,
+    "FP@0.5": 1,
+    "FN@0.5": 7031
+  },
+  "class_aware": {
+    "mAP@0.5": 3.5751739918009347e-05,
+    "mAP@0.5:0.95": 2.5820701051895636e-05
+  },
+  "per_class": {
+    "crab": {
+      "AP@0.5": 0.0002145104395080561,
+      "AP@0.5:0.95": 0.00015492420631137382,
+      "Precision@0.5": 0.17647058823529413,
+      "Recall@0.5": 0.0012155591572123178,
+      "F1@0.5": 0.002414486921529175,
+      "support": 2468,
+      "num_pred": 17
+    },
+    "fish": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 643,
+      "num_pred": 0
+    },
+    "jellyfish": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 117,
+      "num_pred": 0
+    },
+    "shrimp": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 133,
+      "num_pred": 0
+    },
+    "small_fish": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 2113,
+      "num_pred": 0
+    },
+    "starfish": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 1573,
+      "num_pred": 0
+    }
+  },
+  "label_confusion_matrix_iou_0.3": {
+    "starfish": {
+      "crab": 6
+    },
+    "crab": {
+      "crab": 3
+    },
+    "fish": {
+      "crab": 7
+    }
+  },
+  "localization_only_iou_0.3": {
+    "matched": 16,
+    "unmatched_gt": 7031,
+    "unmatched_pred": 1
+  }
+}

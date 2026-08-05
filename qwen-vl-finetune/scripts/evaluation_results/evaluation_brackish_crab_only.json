@@ -1,0 +1,105 @@
+{
+  "num_images_evaluated": 2935,
+  "num_images_gt_only_skipped": 0,
+  "num_images_pred_only_skipped": 0,
+  "num_images_missing_image_skipped": 0,
+  "num_images_missing_metadata": 0,
+  "class_agnostic": {
+    "mAP@0.5": 0.23251130115150936,
+    "mAP@0.5:0.95": 0.12824992635229027,
+    "Precision@0.5": 0.6463539010708822,
+    "Recall@0.5": 0.3597275436355896,
+    "F1@0.5": 0.46221168748290636,
+    "TP@0.5": 2535,
+    "FP@0.5": 1387,
+    "FN@0.5": 4512
+  },
+  "class_aware": {
+    "mAP@0.5": 0.01709953716507513,
+    "mAP@0.5:0.95": 0.008403397375419978
+  },
+  "per_class": {
+    "crab": {
+      "AP@0.5": 0.08093681857873856,
+      "AP@0.5:0.95": 0.0370794358062413,
+      "Precision@0.5": 0.22724922440537745,
+      "Recall@0.5": 0.35615883306320906,
+      "F1@0.5": 0.2774621212121212,
+      "support": 2468,
+      "num_pred": 3868
+    },
+    "fish": {
+      "AP@0.5": 0.00017280110592707791,
+      "AP@0.5:0.95": 0.00010368066355624674,
+      "Precision@0.5": 0.1111111111111111,
+      "Recall@0.5": 0.0015552099533437014,
+      "F1@0.5": 0.003067484662576687,
+      "support": 643,
+      "num_pred": 9
+    },
+    "jellyfish": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 117,
+      "num_pred": 0
+    },
+    "shrimp": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 133,
+      "num_pred": 0
+    },
+    "small_fish": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 2113,
+      "num_pred": 0
+    },
+    "starfish": {
+      "AP@0.5": 0.021487603305785124,
+      "AP@0.5:0.95": 0.013237267782722328,
+      "Precision@0.5": 0.8666666666666667,
+      "Recall@0.5": 0.024793388429752067,
+      "F1@0.5": 0.048207663782447466,
+      "support": 1573,
+      "num_pred": 45
+    }
+  },
+  "label_confusion_matrix_iou_0.3": {
+    "small_fish": {
+      "crab": 75,
+      "fish": 8
+    },
+    "fish": {
+      "crab": 306,
+      "fish": 1
+    },
+    "crab": {
+      "crab": 981
+    },
+    "starfish": {
+      "starfish": 39,
+      "crab": 1195
+    },
+    "shrimp": {
+      "crab": 32
+    },
+    "jellyfish": {
+      "crab": 48
+    }
+  },
+  "localization_only_iou_0.3": {
+    "matched": 2685,
+    "unmatched_gt": 4362,
+    "unmatched_pred": 1237
+  }
+}

@@ -1,0 +1,96 @@
+{
+  "num_images_evaluated": 2935,
+  "num_images_gt_only_skipped": 0,
+  "num_images_pred_only_skipped": 0,
+  "num_images_missing_image_skipped": 0,
+  "num_images_missing_metadata": 0,
+  "class_agnostic": {
+    "mAP@0.5": 0.0021893814997263274,
+    "mAP@0.5:0.95": 0.0011778061586490704,
+    "Precision@0.5": 0.8571428571428571,
+    "Recall@0.5": 0.002554278416347382,
+    "F1@0.5": 0.0050933786078098476,
+    "TP@0.5": 18,
+    "FP@0.5": 3,
+    "FN@0.5": 7029
+  },
+  "class_aware": {
+    "mAP@0.5": 6.265664160401002e-05,
+    "mAP@0.5:0.95": 3.759398496240601e-05
+  },
+  "per_class": {
+    "crab": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 2468,
+      "num_pred": 0
+    },
+    "fish": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 643,
+      "num_pred": 1
+    },
+    "jellyfish": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 117,
+      "num_pred": 0
+    },
+    "shrimp": {
+      "AP@0.5": 0.00037593984962406017,
+      "AP@0.5:0.95": 0.0002255639097744361,
+      "Precision@0.5": 0.05,
+      "Recall@0.5": 0.007518796992481203,
+      "F1@0.5": 0.013071895424836602,
+      "support": 133,
+      "num_pred": 20
+    },
+    "small_fish": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 2113,
+      "num_pred": 0
+    },
+    "starfish": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 1573,
+      "num_pred": 0
+    }
+  },
+  "label_confusion_matrix_iou_0.3": {
+    "fish": {
+      "shrimp": 15
+    },
+    "small_fish": {
+      "fish": 1
+    },
+    "crab": {
+      "shrimp": 1
+    },
+    "shrimp": {
+      "shrimp": 1
+    }
+  },
+  "localization_only_iou_0.3": {
+    "matched": 18,
+    "unmatched_gt": 7029,
+    "unmatched_pred": 3
+  }
+}

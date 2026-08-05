@@ -1,0 +1,96 @@
+{
+  "num_images_evaluated": 2935,
+  "num_images_gt_only_skipped": 0,
+  "num_images_pred_only_skipped": 0,
+  "num_images_missing_image_skipped": 0,
+  "num_images_missing_metadata": 0,
+  "class_agnostic": {
+    "mAP@0.5": 0.010625859909551397,
+    "mAP@0.5:0.95": 0.005781677062703215,
+    "Precision@0.5": 0.9021739130434783,
+    "Recall@0.5": 0.011778061586490706,
+    "F1@0.5": 0.02325255638044544,
+    "TP@0.5": 83,
+    "FP@0.5": 9,
+    "FN@0.5": 6964
+  },
+  "class_aware": {
+    "mAP@0.5": 0.0,
+    "mAP@0.5:0.95": 0.0
+  },
+  "per_class": {
+    "crab": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 2468,
+      "num_pred": 0
+    },
+    "fish": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 643,
+      "num_pred": 0
+    },
+    "jellyfish": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 117,
+      "num_pred": 92
+    },
+    "shrimp": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 133,
+      "num_pred": 0
+    },
+    "small_fish": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 2113,
+      "num_pred": 0
+    },
+    "starfish": {
+      "AP@0.5": 0.0,
+      "AP@0.5:0.95": 0.0,
+      "Precision@0.5": 0.0,
+      "Recall@0.5": 0.0,
+      "F1@0.5": 0.0,
+      "support": 1573,
+      "num_pred": 0
+    }
+  },
+  "label_confusion_matrix_iou_0.3": {
+    "small_fish": {
+      "jellyfish": 19
+    },
+    "fish": {
+      "jellyfish": 55
+    },
+    "starfish": {
+      "jellyfish": 9
+    },
+    "shrimp": {
+      "jellyfish": 3
+    }
+  },
+  "localization_only_iou_0.3": {
+    "matched": 86,
+    "unmatched_gt": 6961,
+    "unmatched_pred": 6
+  }
+}
