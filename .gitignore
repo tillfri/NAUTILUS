@@ -1,2 +1,3 @@
 /qwen-vl-finetune/qwenvl/nautilus_model/__pycache__
 /qwen-vl-finetune/scripts/biigle_reports
+.env

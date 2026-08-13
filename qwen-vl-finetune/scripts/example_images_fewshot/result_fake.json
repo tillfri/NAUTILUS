@@ -1,0 +1,18 @@
+[
+  {
+    "query_image": "/workspace/NAUTILUS/qwen-vl-finetune/scripts/example_images_fewshot/fake_target/013408.jpg",
+    "prompt": "If any species of the type shown in the example images is present in this image, detect them and return the location of each as a bounding box in JSON format, e.g. {\"bbox_2d\": [x1, y1, x2, y2], \"label\": \"...\"}. If none are present, answer exactly: none.",
+    "n_exemplars": 2,
+    "prompt_tokens": 3742,
+    "input_size": [
+      1344,
+      756
+    ],
+    "original_size": [
+      1920,
+      1080
+    ],
+    "response": "{\n\"bbox_2d\": [519, 410, 1190, 929]\n}",
+    "response_raw_coords": "{\n\"bbox_2d\": [363, 287, 833, 650]\n}"
+  }
+]

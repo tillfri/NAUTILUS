@@ -1,0 +1,18 @@
+[
+  {
+    "query_image": "/workspace/NAUTILUS/qwen-vl-finetune/scripts/example_images_fewshot/target/8854_MGF_Clupea_Sep22_AB17(15465).mp4_at_50.28_seconds.jpg",
+    "prompt": "If any species of the type shown in the example images is present in this image, detect them and return the location of each as a bounding box in JSON format, e.g. {\"bbox_2d\": [x1, y1, x2, y2], \"label\": \"...\"}. If none are present, answer exactly: none.",
+    "n_exemplars": 2,
+    "prompt_tokens": 3742,
+    "input_size": [
+      1344,
+      756
+    ],
+    "original_size": [
+      2704,
+      1520
+    ],
+    "response": "{\n\"bbox_2d\": [676, 1033, 946, 1200], \"label\": \"starfish\"},\n{\n\"bbox_2d\": [378, 593, 513, 684], \"label\": \"starfish\"},\n{\n\"bbox_2d\": [54, 607, 215, 700], \"label\": \"starfish\"},\n{\n\"bbox_2d\": [1082, 1140, 1298, 1247], \"label\": \"starfish\"},\n{\n\"bbox_2d\": [1191, 470, 1352, 547], \"label\": \"starfish\"},\n{\n\"bbox_2d\": [811, 547, 919, 623], \"label\": \"",
+    "response_raw_coords": "{\n\"bbox_2d\": [336, 514, 470, 597], \"label\": \"starfish\"},\n{\n\"bbox_2d\": [188, 295, 255, 340], \"label\": \"starfish\"},\n{\n\"bbox_2d\": [27, 302, 107, 348], \"label\": \"starfish\"},\n{\n\"bbox_2d\": [538, 567, 645, 620], \"label\": \"starfish\"},\n{\n\"bbox_2d\": [592, 234, 672, 272], \"label\": \"starfish\"},\n{\n\"bbox_2d\": [403, 272, 457, 310], \"label\": \""
+  }
+]

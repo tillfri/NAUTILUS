@@ -1,0 +1,10 @@
+[
+  {
+    "image": "/workspace/NAUTILUS/qwen-vl-finetune/scripts/example_images_fewshot/24391_MGF_SAR_WH489_St32_DD119(38112).mp4_at_389.28_seconds_detections.jpg",
+    "description": "The target species is the starfish in the red rectangle."
+  },
+  {
+    "image": "/workspace/NAUTILUS/qwen-vl-finetune/scripts/example_images_fewshot/24391_MGF_SAR_WH489_St32_DD119(38112).mp4_at_299.47_seconds_detections.jpg",
+    "description": "The target species is the starfish in the red rectangle."
+  }
+]
