@@ -206,53 +206,88 @@ def epochs_for(n_images, batch, base_epochs, min_updates, max_epochs):
     return min(max(base_epochs, needed), max_epochs)
 
 
-def export_nautilus_format(model, root, split, out_dir, prompt_by_class_id, conf, device,
-                           chunk_size=16):
-    """Re-emit test predictions in batch_inference.py's results/ + metadata.json layout.
+def predict_split(model, root, split, conf, device, chunk_size=16, **predict_kwargs):
+    """Run the detector over a split, returning boxes in original-image pixels.
 
-    Boxes are already in original-image pixels, so ``metadata.json`` records the
-    original size as the input size and ``evaluate_detections.py`` rescales by 1.
+    Results are collected in memory rather than written straight out so that a
+    confidence sweep can be materialised from a single GPU pass -- writing a run
+    directory is then a pure filter over these boxes (see
+    ``write_nautilus_format``). Call with the *lowest* threshold of interest.
 
     The source list is fed in chunks: handed the whole split at once, Ultralytics
     sizes the batch to the source length and tries to allocate ~16 GB. Results
     are zipped back onto the chunk paths because a list source makes Ultralytics
     report every result's ``path`` as "image0.jpg"; order is preserved.
+
+    Returns a list of ``(image_name, height, width, [(bbox, class_id, score)])``.
     """
     images_dir = os.path.join(root, split, "images")
-    results_dir = os.path.join(out_dir, "results")
-    os.makedirs(results_dir, exist_ok=True)
-
     image_paths = [os.path.join(images_dir, n) for n in sorted(os.listdir(images_dir))
                    if os.path.splitext(n)[1].lower() in IMAGE_EXTENSIONS]
 
-    metadata = {"prompt": "yolo", "checkpoint": str(getattr(model, "ckpt_path", "")),
-                "image_dims": {}}
+    collected = []
     for start in range(0, len(image_paths), chunk_size):
         chunk = image_paths[start:start + chunk_size]
         predictions = model.predict(source=chunk, conf=conf, device=device,
-                                    stream=True, verbose=False)
+                                    stream=True, verbose=False, **predict_kwargs)
         for path, prediction in zip(chunk, predictions):
-            name = os.path.basename(path)
             height, width = prediction.orig_shape
-
-            lines = []
+            boxes = []
             for box in prediction.boxes:
                 x1, y1, x2, y2 = (round(float(v)) for v in box.xyxy[0].tolist())
-                class_id = int(box.cls.item())
-                lines.append(json.dumps({
-                    "bbox_2d": [x1, y1, x2, y2],
-                    "label": prompt_by_class_id[class_id],
-                    "score": round(float(box.conf.item()), 4),
-                }, ensure_ascii=False))
+                boxes.append(([x1, y1, x2, y2], int(box.cls.item()),
+                              float(box.conf.item())))
+            collected.append((os.path.basename(path), height, width, boxes))
+    return collected
 
-            stem = os.path.splitext(name)[0]
-            with open(os.path.join(results_dir, stem + ".txt"), "w", encoding="utf-8") as handle:
-                handle.write("\n".join(lines))
-            metadata["image_dims"][name] = {"input_height": height, "input_width": width}
+
+def write_nautilus_format(out_dir, collected, label_by_class_id, checkpoint,
+                          prompt="yolo", min_score=0.0):
+    """Write one results/ + metadata.json run in batch_inference.py's layout.
+
+    Boxes are already in original-image pixels, so ``metadata.json`` records the
+    original size as the input size and ``evaluate_detections.py`` rescales by 1.
+
+    Every box carries a ``label``: ``evaluate_detections.py`` silently drops any
+    detection without one, so a class-agnostic model must still emit a constant
+    string rather than a bare ``bbox_2d``.
+
+    Returns ``(results_dir, boxes_written)``.
+    """
+    results_dir = os.path.join(out_dir, "results")
+    os.makedirs(results_dir, exist_ok=True)
+
+    metadata = {"prompt": prompt, "checkpoint": str(checkpoint), "image_dims": {}}
+    written = 0
+    for name, height, width, boxes in collected:
+        lines = []
+        for bbox, class_id, score in boxes:
+            if score < min_score:
+                continue
+            lines.append(json.dumps({
+                "bbox_2d": list(bbox),
+                "label": label_by_class_id[class_id],
+                "score": round(score, 4),
+            }, ensure_ascii=False))
+        written += len(lines)
+
+        stem = os.path.splitext(name)[0]
+        with open(os.path.join(results_dir, stem + ".txt"), "w", encoding="utf-8") as handle:
+            handle.write("\n".join(lines))
+        metadata["image_dims"][name] = {"input_height": height, "input_width": width}
 
     with open(os.path.join(out_dir, "metadata.json"), "w", encoding="utf-8") as handle:
         json.dump(metadata, handle, indent=2)
-    print("    exported {} test predictions to {}".format(len(image_paths), results_dir))
+    return results_dir, written
+
+
+def export_nautilus_format(model, root, split, out_dir, prompt_by_class_id, conf, device,
+                           chunk_size=16, **predict_kwargs):
+    """Re-emit split predictions in batch_inference.py's layout at one threshold."""
+    collected = predict_split(model, root, split, conf, device, chunk_size, **predict_kwargs)
+    results_dir, _ = write_nautilus_format(out_dir, collected, prompt_by_class_id,
+                                           getattr(model, "ckpt_path", ""))
+    print("    exported {} test predictions to {}".format(len(collected), results_dir))
     return results_dir
 
 

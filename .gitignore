@@ -1,3 +1,4 @@
 /qwen-vl-finetune/scripts/biigle_reports
 .env
 __pycache__/
+CLAUDE.md
