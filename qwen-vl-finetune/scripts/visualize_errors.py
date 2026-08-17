@@ -15,7 +15,9 @@ that contain at least one false positive or false negative, and draws each one a
     │                      │  captioned with IoU) │
     ├──────────────────────┼──────────────────────┤
     │ False Positives      │ False Negatives      │
-    │ (unmatched preds)    │ (unmatched GT boxes) │
+    │ (unmatched preds,    │ (unmatched GT boxes) │
+    │  captioned with      │                      │
+    │  score if present)   │                      │
     └──────────────────────┴──────────────────────┘
 
 Matching is class-aware by default: a prediction only counts as a true positive when
@@ -87,10 +89,20 @@ def split_errors(record: dict, iou_threshold: float, class_aware: bool):
     Returns:
         (tp, fp, fn) — three lists of detection dicts in original image pixel space.
         Each TP entry is the *predicted* box, with an extra "iou" field and a
-        "display" caption of the form "<label> IoU=0.72".
+        "display" caption of the form "<label> IoU=0.72". Each FP entry carries the
+        predicted box's "score" (when the result file has one — NAUTILUS itself emits
+        none, but e.g. YOLO-derived result files do) and a matching "display" caption
+        of the form "<label> score=0.68".
     """
     pred_boxes, pred_labels = _boxes_and_labels(record["pred"])
     gt_boxes, gt_labels = _boxes_and_labels(record["gt"])
+    # Same filter as _boxes_and_labels (valid bbox_2d of length 4), kept parallel so
+    # index i lines up with pred_boxes[i]/pred_labels[i] for score lookup below.
+    pred_scores = [
+        d.get("score")
+        for d in record["pred"]
+        if isinstance(d.get("bbox_2d"), list) and len(d.get("bbox_2d")) == 4
+    ]
 
     matched_pairs, unmatched_pred, unmatched_gt = greedy_match(
         pred_boxes, pred_labels, gt_boxes, gt_labels, iou_threshold, class_aware
@@ -108,10 +120,16 @@ def split_errors(record: dict, iou_threshold: float, class_aware: bool):
             }
         )
 
-    fp = [
-        {"bbox_2d": pred_boxes[i], "label": pred_labels[i]}
-        for i in sorted(unmatched_pred)
-    ]
+    fp = []
+    for i in sorted(unmatched_pred):
+        label = pred_labels[i]
+        score = pred_scores[i]
+        entry = {"bbox_2d": pred_boxes[i], "label": label}
+        if isinstance(score, (int, float)):
+            entry["score"] = round(score, 4)
+            entry["display"] = f"{label} score={score:.2f}"
+        fp.append(entry)
+
     fn = [
         {"bbox_2d": gt_boxes[j], "label": gt_labels[j]}
         for j in sorted(unmatched_gt)
@@ -151,7 +169,7 @@ def draw_error_figure(
 
     _draw_panel(axes[0][0], img_array, gt_detections, f"Ground Truth ({len(gt_detections)})", label_map)
     _draw_panel(axes[0][1], img_array, tp, f"True Positives ({len(tp)})", label_map, text_field="display")
-    _draw_panel(axes[1][0], img_array, fp, f"False Positives ({len(fp)})", label_map)
+    _draw_panel(axes[1][0], img_array, fp, f"False Positives ({len(fp)})", label_map, text_field="display")
     _draw_panel(axes[1][1], img_array, fn, f"False Negatives ({len(fn)})", label_map)
 
     if no_pred_parsed:
