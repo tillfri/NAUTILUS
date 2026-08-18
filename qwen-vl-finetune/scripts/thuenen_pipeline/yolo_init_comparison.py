@@ -41,6 +41,22 @@ Three things worth knowing before changing anything here:
   per run and make the arms non-comparable. Note the consequence for the write-up: at the
   same ``--min-updates`` these arms see a quarter of the images the m@640 curve did.
 
+``--freeze N`` freezes ``model.0.``..``model.{N-1}.``, the first N modules of the
+network. For YOLOv8 the backbone is modules 0-9 and everything from 10 on is the
+"head" section of the yaml (the PAN neck 10-21 plus ``Detect`` 22), so ``--freeze 10``
+is *backbone frozen, head trainable* -- 31.0M of 68.2M parameters held fixed. This is
+follow-up #3 from ``megalodon-finetune-init.md``: the unfrozen sweep found the
+Megalodon advantage vanishing and then reversing at the full split, which reads as the
+marine prior being overwritten. Freezing tests whether it is worth preserving. Two
+caveats that belong in the write-up:
+
+* Ultralytics freezes by ``requires_grad = False``. The frozen modules stay in
+  ``train()`` mode, so their **BatchNorm running statistics still adapt** to Thünen
+  imagery. The representation is preserved, not the normalisation.
+* ``--freeze`` changes what the optimiser touches but nothing else -- same slices, same
+  batch, same schedule, same early stopping -- so a frozen arm is comparable to the
+  unfrozen arm of the same init. Give it its own ``--project`` and ``--run-prefix``.
+
 Test predictions are exported as a **confidence sweep** rather than at one threshold:
 ``evaluate_detections.py`` ignores the ``score`` field and computes AP at a single
 operating point, so a scored detector's mAP is a function of its threshold. The detector
@@ -74,6 +90,15 @@ invocation spelled out -- 18 runs x 7 thresholds is 126 of them -- so run that r
 than typing them:
 
     bash /home/tfricke/brackish/container/thuenen_scaling_x1280_runs/score_commands.sh
+
+Frozen-backbone variant (separate project + run prefix so nothing collides with the
+runs above):
+
+    docker exec brackish python .../yolo_init_comparison.py \
+        --freeze 10 \
+        --project /usr/src/ultralytics/brackish/thuenen_scaling_x1280_frozen_runs \
+        --run-prefix thuenen_yolox1280frz \
+        --budgets full,4,8 --device 0
 """
 
 import argparse
@@ -108,6 +133,8 @@ NAUTILUS_RUNS_CONTAINER = "/workspace/runs"
 NAUTILUS_DATASET = "/workspace/datasets/thuenen_scaling"
 NAUTILUS_SCRIPTS = "/workspace/NAUTILUS/qwen-vl-finetune/scripts"
 RUN_PREFIX = "thuenen_yolox1280"
+# YOLOv8 yaml split: modules 0-9 are the backbone, 10-21 the PAN neck, 22 Detect.
+BACKBONE_MODULES = 10
 
 
 def parse_arms(spec):
@@ -141,6 +168,24 @@ def slice_fingerprint(image_names):
     but it is guaranteed silently, so record it and let ``main`` cross-check the arms.
     """
     return hashlib.sha1("\n".join(sorted(image_names)).encode("utf-8")).hexdigest()
+
+
+def param_split(net, freeze):
+    """(frozen, trainable) parameter counts for ``freeze=N`` on a DetectionModel.
+
+    Recomputed from the trained network rather than trusted from the config: ``freeze``
+    is an index into ``model.<i>.`` names, and a silent off-by-one there would freeze the
+    wrong thing while every other logged number looked right.
+    """
+    frozen = trainable = 0
+    for name, parameter in net.named_parameters():
+        index = name.split(".")[1] if name.startswith("model.") else ""
+        held = index.isdigit() and int(index) < freeze
+        if held or ".dfl." in name:  # Ultralytics always freezes .dfl
+            frozen += parameter.numel()
+        else:
+            trainable += parameter.numel()
+    return frozen, trainable
 
 
 def run_tag(arm, budget, seed):
@@ -205,8 +250,9 @@ def run_one(args, root, class_names, prompt_by_class_id, image_classes,
 
     starved = [class_names[c] for c in range(len(class_names))
                if budget is not None and realised[c] < budget]
-    print("\n=== {} : {} train images, {} epochs, init {} ===".format(
-        tag, len(image_names), epochs, os.path.basename(weights)))
+    print("\n=== {} : {} train images, {} epochs, init {}{} ===".format(
+        tag, len(image_names), epochs, os.path.basename(weights),
+        ", freeze {}".format(args.freeze) if args.freeze else ""))
     if starved:
         print("    {} class(es) below the budget (pool exhausted): {}".format(
             len(starved), ", ".join(starved[:6]) + (" ..." if len(starved) > 6 else "")))
@@ -228,10 +274,14 @@ def run_one(args, root, class_names, prompt_by_class_id, image_classes,
         pretrained=True,
         val=True,
         plots=False,
+        # None rather than 0 so an unfrozen run's args.yaml is identical to the
+        # pre-freeze sweep's; both give an empty freeze list either way.
+        freeze=args.freeze or None,
     )
 
     best = os.path.join(run_dir, "train", "weights", "best.pt")
     model = YOLO(best)
+    frozen_params, trainable_params = param_split(model.model, args.freeze)
     metrics = model.val(data=yaml_path, split="test", imgsz=args.imgsz,
                         batch=args.batch, device=args.device,
                         project=args.project, name=os.path.join(tag, "test"),
@@ -255,6 +305,9 @@ def run_one(args, root, class_names, prompt_by_class_id, image_classes,
         "seed": seed,
         "imgsz": args.imgsz,
         "batch": args.batch,
+        "freeze": args.freeze,
+        "frozen_params": frozen_params,
+        "trainable_params": trainable_params,
         "train_images": len(image_names),
         "train_images_sha1": slice_fingerprint(image_names),
         "epochs": epochs,
@@ -271,8 +324,9 @@ def run_one(args, root, class_names, prompt_by_class_id, image_classes,
     }
     with open(result_path, "w", encoding="utf-8") as handle:
         json.dump(record, handle, indent=2, ensure_ascii=False)
-    print("    test mAP50={:.4f}  mAP50-95={:.4f}".format(
-        record["test_mAP50"], record["test_mAP50_95"]))
+    print("    test mAP50={:.4f}  mAP50-95={:.4f}  ({:,} trainable / {:,} frozen)".format(
+        record["test_mAP50"], record["test_mAP50_95"],
+        trainable_params, frozen_params))
     return record
 
 
@@ -283,7 +337,7 @@ def to_host(container_path):
     return container_path
 
 
-def write_score_commands(path, records):
+def write_score_commands(path, records, run_prefix=RUN_PREFIX):
     """Emit the copy-across + scoring commands for every run x threshold.
 
     Not run automatically: the copy targets live outside this container and the scorers
@@ -301,7 +355,7 @@ def write_score_commands(path, records):
         "",
     ]
     for record in sorted(records, key=lambda r: (r["arm"], _budget_key(r["budget"]), r["seed"])):
-        run_name = "{}_{}".format(RUN_PREFIX, run_tag(
+        run_name = "{}_{}".format(run_prefix, run_tag(
             record["arm"],
             None if record["budget"] == "full" else record["budget"],
             record["seed"]))
@@ -401,6 +455,13 @@ def main():
                         help="4 fits YOLOv8x at 1280 on a 24 GB card; 8 will OOM.")
     parser.add_argument("--imgsz", type=int, default=1280,
                         help="Megalodon's inference resolution; both arms must match.")
+    parser.add_argument("--freeze", type=int, default=0,
+                        help="Freeze the first N modules (0 = train everything). "
+                             "{} = the YOLOv8 backbone, leaving the neck and Detect "
+                             "head trainable.".format(BACKBONE_MODULES))
+    parser.add_argument("--run-prefix", default=RUN_PREFIX,
+                        help="Prefix of the nautilus-side run directory names in the "
+                             "generated scoring script.")
     parser.add_argument("--device", default="0")
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--export-confs", default=DEFAULT_EXPORT_CONFS,
@@ -434,6 +495,9 @@ def main():
     print("{} classes, {} images in the train pool, {} test images".format(
         len(class_names), len(image_classes), n_test))
     print("arms: {}".format(", ".join("{} <- {}".format(n, w) for n, w in arms)))
+    print("freeze: {}".format(
+        "{} module(s) -- backbone frozen, head trainable".format(args.freeze)
+        if args.freeze else "none, whole network trainable"))
 
     budgets = [None if b.strip().lower() == "full" else int(b)
                for b in args.budgets.split(",") if b.strip()]
@@ -463,7 +527,8 @@ def main():
     check_slice_identity(records)
     print_table(records, arms)
     write_score_commands(
-        args.score_commands or os.path.join(args.project, "score_commands.sh"), records)
+        args.score_commands or os.path.join(args.project, "score_commands.sh"), records,
+        run_prefix=args.run_prefix)
     print("summary: {}".format(summary_path))
     return 0
 
