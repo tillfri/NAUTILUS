@@ -18,9 +18,17 @@ published tables in ``masterarbeit/thuenen-scaling-experiment.md`` and
                          (< 1) from models that learned the annotation UI (> 1).
     box_convention.png   why: predicted box area vs. GT, and the share of exactly
                          square boxes climbing toward the GT's 24.9%.
+    init_comparison.png  COCO- vs. Megalodon-initialised YOLOv8x at 1280. The marine
+                         prior is worth ~2.6x the training data at 32-64 images per
+                         class and nothing at either end — and it does not move the
+                         budget at which the detector overtakes zero-shot NAUTILUS.
 
 This runs on the **host** interpreter — it needs only matplotlib and the json
 files, no torch. It is the one script here that does not need the container.
+
+The first four plots read only ``localization.json``; ``init_comparison.png`` also
+reads the two Ultralytics sweep summaries under ``--sweeps-dir``, because the
+ranked-PR mAP it plots in its left panel does not exist in the localization files.
 
 Usage:
     python3 /home/tfricke/nautilus/NAUTILUS/qwen-vl-finetune/scripts/plot_presentation_figures.py
@@ -33,6 +41,7 @@ Usage:
 
 import argparse
 import json
+import math
 from pathlib import Path
 
 import matplotlib
@@ -66,6 +75,7 @@ TRAIN_IMAGES = {  # realised training images per budget, for the axis subtitle
 }
 MEGA_CONFS = ["001", "005", "010", "015", "025", "040", "050", "060"]
 MEGA_MATCHED = "050"  # the threshold where Megalodon emits NAUTILUS's box budget
+INIT_CONF = "025"    # the operating point the init-comparison arms are scored at
 
 plt.rcParams.update({
     "font.family": "sans-serif",
@@ -376,6 +386,154 @@ def plot_box_convention(runs: dict, out: Path) -> None:
     plt.close(fig)
 
 
+# --- plot 5: does a marine prior buy training data? ---------------------------
+
+def load_init_arms(runs_dir: Path, sweeps_dir: Path) -> dict:
+    """Ultralytics mAP and prompt-space recall for the two initialisation arms.
+
+    Two sources, because the two panels are two different metrics and mixing them
+    is the mistake ``megalodon-finetune-init.md`` warns about: the Ultralytics mAP
+    integrates a ranked PR curve over the 29 fine classes, the recall comes from
+    ``localization_report.py`` at one operating point over the 24 prompt classes.
+    """
+    arms = {}
+    records = json.loads((sweeps_dir / "thuenen_scaling_x1280_runs"
+                          / "init_comparison.json").read_text())
+    for arm in ("coco", "mega"):
+        by_budget = {str(r["budget"]): r for r in records if r["arm"] == arm}
+        arms[arm] = {
+            "map50": [by_budget[b]["test_mAP50"] for b in BUDGETS],
+            "centre": [
+                json.loads((runs_dir / f"thuenen_yolox1280_{arm}_n{b}_s0"
+                            / f"c{INIT_CONF}" / "localization.json").read_text()
+                           )["criteria"]["centre_in_box"]["recall"]
+                for b in BUDGETS
+            ],
+        }
+
+    m640 = {str(r["budget"]): r for r in
+            json.loads((sweeps_dir / "thuenen_scaling_runs"
+                        / "sweep_results.json").read_text())}
+    arms["m640"] = {"map50": [m640[b]["test_mAP50"] for b in BUDGETS]}
+    return arms
+
+
+def crossing_images(ys: list, target: float) -> float | None:
+    """Training images at which a budget curve first reaches ``target``.
+
+    Log-interpolated between the two bracketing budgets — the budget grid is
+    geometric, so linear interpolation on the raw image count would systematically
+    overstate the crossing point.
+    """
+    xs = [TRAIN_IMAGES[b] for b in BUDGETS]
+    for i in range(1, len(ys)):
+        if ys[i - 1] < target <= ys[i]:
+            t = (target - ys[i - 1]) / (ys[i] - ys[i - 1])
+            return math.exp(math.log(xs[i - 1]) + t * (math.log(xs[i]) - math.log(xs[i - 1])))
+    return None
+
+
+def plot_init_comparison(runs: dict, out: Path, arms: dict) -> None:
+    """The marine prior is a mid-budget accelerator, not a few-shot enabler."""
+    x = range(len(BUDGETS))
+    naut = recall(runs["nautilus"], "centre_in_box")
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6.4))
+
+    # -- panel A: where the prior pays, in the metric it was trained against ---
+    ax1.axvspan(4.6, 6.4, color=GRID, alpha=0.55, zorder=0)
+    ax1.plot(x, arms["m640"]["map50"], color=MUTED, linewidth=1.4, linestyle=":",
+             marker="", zorder=2)
+    # Every label is placed where the two curves are furthest apart (n=64) or
+    # where the panel is empty (top-left, bottom-centre) — at the right edge the
+    # three series converge into 0.02 mAP and the labels would overlap.
+    ax1.annotate("YOLOv8m @640\n(reference line, not a control)",
+                 xy=(4, arms["m640"]["map50"][4]), xytext=(12, -34),
+                 textcoords="offset points", fontsize=11, color=MUTED, ha="left",
+                 linespacing=1.4)
+    for arm, colour, label, dy in (("coco", YOLO, "COCO init", -22),
+                                   ("mega", MEGA, "Megalodon init", 14)):
+        ax1.plot(x, arms[arm]["map50"], color=colour, linewidth=2, marker="o",
+                 markersize=8, markerfacecolor=colour, markeredgecolor=SURFACE,
+                 markeredgewidth=2, zorder=3)
+        ax1.annotate(label, xy=(6, arms[arm]["map50"][6]), xytext=(0, dy),
+                     textcoords="offset points", fontsize=12, color=colour,
+                     fontweight="bold", ha="center")
+
+    gap64 = arms["mega"]["map50"][6] - arms["coco"]["map50"][6]
+    ax1.text(0.02, 0.98,
+             "Megalodon init wins at 7 of 9 budgets\n"
+             f"+{gap64:.3f} at n=64 — COCO needs $\\approx$2.6$\\times$ the data to match it\n"
+             "…and loses at the full split",
+             transform=ax1.transAxes, fontsize=12, color=INK_2, ha="left", va="top",
+             linespacing=1.6)
+    ax1.text(5.5, 0.006, "the prior pays here", fontsize=12, color=INK_2, ha="center")
+    ax1.set_title("Where the marine prior pays\nUltralytics test mAP@0.5, 29 fine classes",
+                  color=INK, pad=14, linespacing=1.4)
+    ax1.set_ylabel("test mAP@0.5")
+    ax1.set_ylim(0, 0.30)
+
+    # -- panel B: the question the experiment was run for ----------------------
+    ax2.axhline(naut, color=NAUT, linewidth=2, linestyle="--", zorder=2)
+    ax2.annotate("NAUTILUS zero-shot\n0 training images", xy=(0, naut), xytext=(2, 8),
+                 textcoords="offset points", fontsize=12, color=NAUT,
+                 fontweight="bold", va="bottom", linespacing=1.4)
+    # Anchored per arm at a budget where that curve is alone: the two arms cross
+    # each other twice past n=64, and anything near the NAUTILUS line collides
+    # with it. (budget index, y-offset in points)
+    for arm, colour, label, at, dy in (("coco", YOLO, "COCO init", 3, -22),
+                                       ("mega", MEGA, "Megalodon init", 7, 14)):
+        ys = arms[arm]["centre"]
+        ax2.plot(x, ys, color=colour, linewidth=2, marker="o", markersize=8,
+                 markerfacecolor=colour, markeredgecolor=SURFACE, markeredgewidth=2,
+                 zorder=3)
+        ax2.annotate(label, xy=(at, ys[at]), xytext=(0, dy), textcoords="offset points",
+                     fontsize=12, color=colour, fontweight="bold", ha="center")
+
+    # Both arms cross inside the same budget step, so one shared marker: two
+    # annotations 4 images apart would be unreadable and would imply a difference.
+    crossings = {arm: crossing_images(arms[arm]["centre"], naut) for arm in ("coco", "mega")}
+    ax2.axvspan(4, 5, color=GRID, alpha=0.55, zorder=0)
+    ax2.annotate(
+        "both arms cross here\n"
+        f"COCO {crossings['coco']:.0f} images  ·  Megalodon {crossings['mega']:.0f}\n"
+        f"$\\approx${crossings['coco'] / 29:.0f} images per class either way",
+        xy=(4.5, naut), xytext=(0.33, 0.99), textcoords="axes fraction",
+        fontsize=12, color=INK, ha="center", va="top", linespacing=1.6,
+    )
+    ax2.set_title("…and where it does not: the NAUTILUS crossing point\n"
+                  "class-agnostic centre-in-box recall, 24 prompt classes",
+                  color=INK, pad=14, linespacing=1.4)
+    ax2.set_ylabel("recall on all 1564 test boxes")
+    ax2.set_ylim(0, 0.72)
+
+    for ax in (ax1, ax2):
+        ax.set_xticks(list(x))
+        ax.set_xticklabels(BUDGETS)
+        ax.set_xlabel("training images per class")
+        ax.set_xlim(-0.4, len(BUDGETS) - 0.6)
+        style_axes(ax)
+
+    fig.legend(
+        handles=[
+            Line2D([], [], color=YOLO, lw=2, marker="o", markersize=8,
+                   markeredgecolor=SURFACE, markeredgewidth=2,
+                   label="YOLOv8x @1280, COCO init (control)"),
+            Line2D([], [], color=MEGA, lw=2, marker="o", markersize=8,
+                   markeredgecolor=SURFACE, markeredgewidth=2,
+                   label="YOLOv8x @1280, Megalodon init"),
+            Line2D([], [], color=NAUT, lw=2, ls="--", label="NAUTILUS (zero-shot)"),
+        ],
+        loc="lower center", ncol=3, frameon=False, bbox_to_anchor=(0.5, -0.005),
+    )
+    fig.suptitle("Same architecture, same data, same schedule — only the initialisation weights differ:\n"
+                 "a marine prior is worth ~2.6× the data at 32–64 images/class, and nothing where the NAUTILUS comparison lives",
+                 fontsize=14, color=INK, y=0.995, linespacing=1.4)
+    fig.tight_layout(rect=(0, 0.055, 1, 0.93))
+    fig.savefig(out, dpi=200)
+    plt.close(fig)
+
+
 # --- verification printout ----------------------------------------------------
 
 def print_checks(runs: dict) -> None:
@@ -417,6 +575,10 @@ def main() -> None:
     ap.add_argument("--runs-dir", type=Path, default=Path("/home/tfricke/nautilus/runs"))
     ap.add_argument("--out-dir", type=Path,
                     default=Path("/home/tfricke/nautilus/demonstration/figures"))
+    ap.add_argument("--sweeps-dir", type=Path,
+                    default=Path("/home/tfricke/brackish/container"),
+                    help="holds thuenen_scaling_runs/ and thuenen_scaling_x1280_runs/ "
+                         "— the Ultralytics-side sweep summaries plot 5 reads")
     args = ap.parse_args()
 
     runs = load_runs(args.runs_dir)
@@ -429,6 +591,10 @@ def main() -> None:
         path = args.out_dir / name
         fn(runs, path)
         print(f"wrote {path}")
+
+    arms = load_init_arms(args.runs_dir, args.sweeps_dir)
+    plot_init_comparison(runs, args.out_dir / "init_comparison.png", arms)
+    print(f"wrote {args.out_dir / 'init_comparison.png'}")
 
     print_checks(runs)
 
