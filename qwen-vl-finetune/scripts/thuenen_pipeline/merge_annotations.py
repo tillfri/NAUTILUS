@@ -74,6 +74,7 @@ thuenen_pipeline/merge_annotations.py \
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 from collections import Counter
@@ -243,9 +244,19 @@ def load_drop_regions(path):
     """Recurring-artifact regions to delete before anything else looks at a box.
 
     Accepts either ``{"regions": [...]}`` or a bare list. Each region is
-    ``{"box": [x1, y1, x2, y2]}`` in **normalised** coordinates, optionally with
-    ``splits`` (list) and ``containment`` (default 0.8); a proposal is dropped when
-    that fraction of it falls inside the region.
+    ``{"box": [x1, y1, x2, y2]}`` in **normalised** coordinates, plus:
+
+    * ``match`` -- ``"iou"`` (default) drops a proposal whose IoU with the region
+      reaches ``iou`` (default 0.5); ``"containment"`` drops a proposal of which
+      ``containment`` (default 0.8) falls inside the region.
+    * ``videos`` -- restrict the region to frames of these videos (the image stem
+      minus its ``_fNNNNNN`` suffix). ``splits`` does the same one level up.
+
+    The two match modes are not interchangeable and the choice matters. The
+    towing chain's bounding box covers ~35% of the frame, so a *containment*
+    region drawn around it deletes every animal that happens to sit in that
+    third of the image. Matching by IoU deletes the artifact box itself and
+    leaves the animals inside it alone -- which is why ``iou`` is the default.
     """
     if not path:
         return []
@@ -254,20 +265,43 @@ def load_drop_regions(path):
     regions = data.get("regions", data) if isinstance(data, dict) else data
     out = []
     for region in regions:
+        match = region.get("match", "iou")
+        if match not in ("iou", "containment"):
+            raise SystemExit("drop region {!r}: unknown match mode {!r}"
+                             .format(region.get("comment", ""), match))
+        videos = region.get("videos")
         out.append({
             "box": tuple(float(v) for v in region["box"]),
             "splits": region.get("splits"),
+            "videos": set(videos) if videos else None,
+            "match": match,
+            "iou": float(region.get("iou", 0.5)),
             "containment": float(region.get("containment", 0.8)),
             "comment": region.get("comment", ""),
         })
     return out
 
 
-def dropped_by_region(box, regions, split):
+def video_of(stem):
+    """``AB08_2_GX020027-converted(15459)_f000909`` -> the video it was cut from.
+
+    The split unit is the video, and a rig artifact sits at a position fixed by
+    that video's camera geometry, so drop regions are scoped the same way.
+    """
+    return re.sub(r"_f\d+$", "", stem)
+
+
+def dropped_by_region(box, regions, split, stem=None):
     for region in regions:
         if region["splits"] and split not in region["splits"]:
             continue
-        if containment(box, region["box"]) >= region["containment"]:
+        if region["videos"] and (stem is None
+                                 or video_of(stem) not in region["videos"]):
+            continue
+        if region["match"] == "iou":
+            if iou(box, region["box"]) >= region["iou"]:
+                return True
+        elif containment(box, region["box"]) >= region["containment"]:
             return True
     return False
 
@@ -461,9 +495,9 @@ def merge_split(args, split, unmatched_ids, drop_regions):
         if drop_regions:
             before = len(megalodon) + len(nautilus)
             megalodon = [p for p in megalodon
-                         if not dropped_by_region(p["box"], drop_regions, split)]
+                         if not dropped_by_region(p["box"], drop_regions, split, stem)]
             nautilus = [p for p in nautilus
-                        if not dropped_by_region(p["box"], drop_regions, split)]
+                        if not dropped_by_region(p["box"], drop_regions, split, stem)]
             stats["dropped_by_region"] += before - len(megalodon) - len(nautilus)
 
         pool, fused = fuse_sources(megalodon, nautilus, args.fuse,
