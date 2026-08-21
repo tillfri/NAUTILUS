@@ -36,6 +36,18 @@ The merge, per image:
    proposal >=70% contained; the rest keep their original box unchanged.
 4. Surviving proposals become **new annotations** under ``--unmatched-label``.
 
+The two uses of a proposal want opposite thresholds, so they get one each.
+A proposal that lies >=70% inside a human-drawn GT box is vouched for by the human
+regardless of its score, and refinement coverage keeps climbing all the way down to
+conf 0.01 (80.2% of test GT boxes) -- so ``--megalodon-conf`` should be *low*. An
+unmatched proposal has nothing vouching for it and enters the dataset as an
+unverified ``unidentified organism``, and at conf 0.01 that is 12.2 new boxes per
+image against a GT density of 1.20 -- so ``--megalodon-add-conf`` should be *high*.
+Measured on the test split, the price of lowering the threshold is 28 refined GT
+boxes per 100 added ones between 0.5 and 0.25, but only 2 per 100 below 0.1
+(``proposal_threshold_report.py --marginal``). ``--megalodon-add-conf`` defaults to
+``--megalodon-conf``, which is the old single-threshold behaviour.
+
 Coordinates are the step that silently breaks. Megalodon writes original-image
 pixels; NAUTILUS writes model-input pixels, and only ``metadata.json`` knows the
 scale. Everything here is normalised to ``[0, 1]`` on load -- ``x / input_width``,
@@ -52,7 +64,8 @@ thuenen_pipeline/merge_annotations.py \
         --megalodon-run  /workspace/runs/megalodon_proposals \
         --nautilus-run   /workspace/runs/nautilus_proposals \
         --out            /workspace/datasets/thuenen_refined \
-        --megalodon-conf 0.25 --containment 0.7 --fuse megalodon
+        --megalodon-conf 0.01 --megalodon-add-conf 0.40 \
+        --containment 0.7 --fuse megalodon
 
     # inspect the numbers before materialising anything:
     python3 merge_annotations.py ... --splits test --dry-run
@@ -311,6 +324,14 @@ def refine_ground_truth(gt_boxes, pool, min_containment):
     proposal -- the better-fitting pair wins and the other GT box falls through to
     its original geometry.
 
+    The returned consumed set is wider than the assignment: **every** proposal that
+    sits inside some GT box counts as consumed, not just the one that won it. A
+    proposal >=70% contained in a human-drawn box is already explained by that box,
+    and letting the runners-up through would re-add the same animal as a second,
+    unverified annotation. Two Megalodon boxes on one object is the normal case at a
+    low ``--megalodon-conf``, so without this the refine threshold and the add
+    threshold could not be set independently.
+
     Returns ``(annotations, consumed_proposal_indices)``.
     """
     candidates = []
@@ -345,11 +366,18 @@ def refine_ground_truth(gt_boxes, pool, min_containment):
                 "sources": proposal["sources"], "score": proposal["score"],
                 "gt_box": gt["box"],
             })
-    return annotations, used_p
+    consumed = {p_index for _overlap, _gt_index, p_index in candidates}
+    return annotations, consumed
 
 
-def add_unmatched(annotations, pool, used, policy, fine_id, prompt_id, dedupe_iou):
-    """Every leftover proposal the policy allows becomes a new annotation."""
+def add_unmatched(annotations, pool, used, policy, fine_id, prompt_id, dedupe_iou,
+                  min_score=None):
+    """Every leftover proposal the policy allows becomes a new annotation.
+
+    ``min_score`` is the second, stricter threshold: a proposal good enough to
+    retighten a human's box is not automatically good enough to invent one. A
+    scoreless proposal (NAUTILUS emits none) is never filtered by it.
+    """
     if policy == "none":
         return []
 
@@ -363,12 +391,15 @@ def add_unmatched(annotations, pool, used, policy, fine_id, prompt_id, dedupe_io
             continue
         if policy == "nautilus" and "nautilus" not in sources:
             continue
+        score = proposal["score"]
+        if min_score is not None and score is not None and score < min_score:
+            continue
         if any(iou(proposal["box"], other) >= dedupe_iou for other in emitted):
             continue
         emitted.append(proposal["box"])
         added.append({
             "fine_id": fine_id, "prompt_id": prompt_id, "box": proposal["box"],
-            "origin": "added", "sources": sources, "score": proposal["score"],
+            "origin": "added", "sources": sources, "score": score,
             "gt_box": None,
         })
     return added
@@ -441,12 +472,19 @@ def merge_split(args, split, unmatched_ids, drop_regions):
 
         annotations, used = refine_ground_truth(gt_boxes, pool, args.containment)
         added = add_unmatched(annotations, pool, used, args.unmatched,
-                              unmatched_ids[0], unmatched_ids[1], args.dedupe_iou)
+                              unmatched_ids[0], unmatched_ids[1], args.dedupe_iou,
+                              min_score=args.megalodon_add_conf)
+        if args.megalodon_add_conf > args.megalodon_conf:
+            at_refine_conf = add_unmatched(annotations, pool, used, args.unmatched,
+                                           unmatched_ids[0], unmatched_ids[1],
+                                           args.dedupe_iou)
+            stats["add_conf_suppressed"] += len(at_refine_conf) - len(added)
         annotations.extend(added)
 
         all_gt_areas.extend(area(gt["box"]) for gt in gt_boxes)
         stats["gt_boxes"] += len(gt_boxes)
-        stats["added"] += len(added)
+        # ``added`` is not counted here -- the origin loop below already counts it,
+        # and ``annotations`` has just been extended with it.
         for annotation in annotations:
             stats[annotation["origin"]] += 1
             if annotation["origin"] == "gt_refined":
@@ -502,8 +540,15 @@ def main():
     parser.add_argument("--out", default=DEFAULT_OUT)
     parser.add_argument("--splits", default=DEFAULT_SPLITS)
 
-    parser.add_argument("--megalodon-conf", type=float, default=0.25,
-                        help="Operating point chosen by eyeballing the proposals.")
+    parser.add_argument("--megalodon-conf", type=float, default=0.01,
+                        help="Score floor for a proposal to be used at all, i.e. to "
+                             "retighten a GT box it sits inside. Low on purpose -- "
+                             "the human vouches for the object, not the detector.")
+    parser.add_argument("--megalodon-add-conf", type=float, default=None,
+                        help="Higher score floor for a leftover proposal to become a "
+                             "*new* annotation, where nothing vouches for it. "
+                             "Defaults to --megalodon-conf (single-threshold "
+                             "behaviour). See proposal_threshold_report.py.")
     parser.add_argument("--containment", type=float, default=0.7,
                         help="Fraction of a proposal that must lie inside a GT box "
                              "for the GT box to adopt its geometry.")
@@ -531,6 +576,13 @@ def main():
     parser.add_argument("--report", action="store_true",
                         help="Also write per-box provenance.json.")
     args = parser.parse_args()
+    if args.megalodon_add_conf is None:
+        args.megalodon_add_conf = args.megalodon_conf
+    if args.megalodon_add_conf < args.megalodon_conf:
+        raise SystemExit("--megalodon-add-conf ({}) below --megalodon-conf ({}): a "
+                         "proposal too weak to refine a box cannot be strong enough "
+                         "to invent one".format(args.megalodon_add_conf,
+                                                args.megalodon_conf))
 
     fine_names = read_class_names(os.path.join(args.dataset, "classes.txt"))
     prompt_names = read_class_names(os.path.join(args.dataset, "classes_prompt.txt"))
@@ -538,6 +590,8 @@ def main():
                      find_class_id(prompt_names, args.unmatched_label))
     print("added boxes go in as {!r} (classes.txt id {}, classes_prompt.txt id {})"
           .format(args.unmatched_label, unmatched_ids[0], unmatched_ids[1]))
+    print("megalodon conf: refine >= {}, add >= {}"
+          .format(args.megalodon_conf, args.megalodon_add_conf))
 
     drop_regions = load_drop_regions(args.drop_boxes)
     if drop_regions:
@@ -571,6 +625,9 @@ def main():
         print("  fused pairs {fused_pairs}, proposals in: "
               "megalodon {megalodon_proposals}, nautilus {nautilus_proposals}"
               .format(**summary))
+        if summary.get("add_conf_suppressed"):
+            print("  {} would-be added boxes held back by --megalodon-add-conf {}"
+                  .format(summary["add_conf_suppressed"], args.megalodon_add_conf))
         if summary.get("dropped_by_region"):
             print("  {} proposals dropped by artifact regions"
                   .format(summary["dropped_by_region"]))
