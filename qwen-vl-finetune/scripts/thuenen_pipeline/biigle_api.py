@@ -18,6 +18,8 @@ import requests
 from requests.auth import HTTPBasicAuth
 
 DEFAULT_BASE_URL = "https://biigle.de/api/v1"
+# POST image-annotations rejects a request with more than 100 annotations.
+BULK_ANNOTATION_LIMIT = 100
 DEFAULT_ENV_FILE = os.path.normpath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "old_scripts", ".env")
 )
@@ -90,6 +92,52 @@ class BiigleApi(object):
         response.raise_for_status()
         return response
 
+    def post(self, path, json=None, retries=5, **kwargs):
+        """Perform a POST against the API, retrying the failures worth retrying.
+
+        A 422 is a validation error -- the same body will fail the same way
+        forever, so it is raised immediately. A 429 or a 5xx is the server
+        asking for patience: those are retried with exponential backoff,
+        honouring ``Retry-After`` when the server sends one.
+
+        Args:
+            path: API path below ``base_url``.
+            json: Request body, serialised as JSON.
+            retries: Attempts before giving up on a retryable failure.
+            **kwargs: Passed through to ``requests``.
+
+        Returns:
+            The successful ``requests.Response``.
+
+        Raises:
+            Exception: On a 422, carrying ``(message, errors)``.
+            requests.HTTPError: If every attempt failed.
+        """
+        url = "{}/{}".format(self.base_url, path.lstrip("/"))
+        last_error = None
+        for attempt in range(retries):
+            try:
+                response = self.session.post(url, json=json, **kwargs)
+            except requests.RequestException as error:
+                last_error = error
+                time.sleep(min(2 ** attempt, 30))
+                continue
+            if response.status_code == 422:
+                body = response.json()
+                raise Exception(body.get("message"), body.get("errors"))
+            if response.status_code == 429 or response.status_code >= 500:
+                last_error = requests.HTTPError(
+                    "{} {} for {}".format(response.status_code, response.reason, url),
+                    response=response,
+                )
+                retry_after = response.headers.get("Retry-After")
+                delay = float(retry_after) if retry_after else min(2 ** attempt, 30)
+                time.sleep(delay)
+                continue
+            response.raise_for_status()
+            return response
+        raise last_error if last_error else requests.HTTPError("POST failed: " + url)
+
     def whoami(self):
         """Return the authenticated user object (cheap credential check)."""
         return self.get("users/my").json()
@@ -101,6 +149,91 @@ class BiigleApi(object):
     def volume_files(self, volume_id):
         """Return the file IDs of a volume (the API returns bare integer IDs)."""
         return self.get("volumes/{}/files".format(volume_id)).json()
+
+    def volume_filenames(self, volume_id):
+        """Return the volume's ``{file_id: filename}`` map.
+
+        The one call that turns BIIGLE's opaque image IDs back into the names
+        the files had on disk when they were uploaded.
+        """
+        return self.get("volumes/{}/filenames".format(volume_id)).json()
+
+    def volume_annotations(self, volume_id):
+        """Return every annotation of a volume, each with its ``image_id``."""
+        return self.get("volumes/{}/annotations".format(volume_id)).json()
+
+    def volume_annotated_files(self, volume_id):
+        """Return the IDs of the volume's files that already have annotations."""
+        return self.get("volumes/{}/files/filter/annotations".format(volume_id)).json()
+
+    def image_info(self, image_id):
+        """Return an image object; ``attrs`` carries ``width``/``height``."""
+        return self.get("images/{}".format(image_id)).json()
+
+    def shapes(self):
+        """Return the annotation shape objects (``id``/``name``)."""
+        return self.get("shapes").json()
+
+    def label_tree(self, tree_id):
+        """Return a label tree including its ``labels``."""
+        return self.get("label-trees/{}".format(tree_id)).json()
+
+    def project_label_trees(self, project_id):
+        """Return the label trees a project uses, each with its ``labels``."""
+        return self.get("projects/{}/label-trees".format(project_id)).json()
+
+    def attach_label_tree(self, project_id, tree_id):
+        """Add an existing label tree to a project.
+
+        BIIGLE only accepts an annotation whose label belongs to a tree used by
+        one of the projects the image belongs to, so this is a precondition for
+        uploading annotations in someone else's label space.
+        """
+        return self.post(
+            "projects/{}/label-trees".format(project_id), json={"id": tree_id}
+        )
+
+    def create_label_tree(self, name, visibility_id=2, project_id=None, description=None):
+        """Create a label tree; ``project_id`` attaches it in the same call.
+
+        Args:
+            name: Tree name.
+            visibility_id: 1 public, 2 private (the default -- a tree created by
+                a script has no business being visible to everyone).
+            project_id: Attach to this project immediately (requires project admin).
+            description: Optional description.
+        """
+        body = {"name": name, "visibility_id": visibility_id}
+        if project_id is not None:
+            body["project_id"] = project_id
+        if description is not None:
+            body["description"] = description
+        return self.post("label-trees", json=body).json()
+
+    def create_label(self, tree_id, name, color, parent_id=None):
+        """Create a label in a tree. Returns the list of created labels."""
+        body = {"name": name, "color": color}
+        if parent_id is not None:
+            body["parent_id"] = parent_id
+        return self.post("label-trees/{}/labels".format(tree_id), json=body).json()
+
+    def bulk_store_image_annotations(self, records):
+        """Create image annotations in bulk.
+
+        Args:
+            records: List of ``{image_id, shape_id, label_id, confidence, points}``
+                dicts. The endpoint caps a request at 100.
+
+        Raises:
+            ValueError: If more than 100 records are passed.
+        """
+        if len(records) > BULK_ANNOTATION_LIMIT:
+            raise ValueError(
+                "POST image-annotations accepts at most {} annotations, got {}".format(
+                    BULK_ANNOTATION_LIMIT, len(records)
+                )
+            )
+        return self.post("image-annotations", json=records).json()
 
     def download_video(self, video_id, dest, expected_size=None, chunk_size=1 << 20,
                        retries=5, progress=None, min_rate=256 << 10, stall_window=20.0,
