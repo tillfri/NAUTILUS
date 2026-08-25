@@ -166,6 +166,89 @@ class BiigleApi(object):
         """Return the IDs of the volume's files that already have annotations."""
         return self.get("volumes/{}/files/filter/annotations".format(volume_id)).json()
 
+    def video_info(self, video_id):
+        """Return a video object; ``volume_id`` is the volume it belongs to."""
+        return self.get("videos/{}".format(video_id)).json()
+
+    def video_annotations(self, video_id):
+        """Return every annotation of a single video."""
+        return self.get("videos/{}/annotations".format(video_id)).json()
+
+    def volume_info(self, volume_id):
+        """Return a volume object including the ``projects`` it belongs to."""
+        return self.get("volumes/{}".format(volume_id)).json()
+
+    def clone_volume(self, volume_id, project_id, name=None, only_files=None,
+                     clone_annotations=False, clone_file_labels=False):
+        """Clone a volume into a project, by default without its annotations.
+
+        Cloning is how a volume owned by someone else's project becomes readable
+        in ours. The server already defaults ``clone_annotations`` to false, but
+        the whole point of the call is that the original labels must *not* come
+        along -- so it is sent explicitly, where a reader can see it.
+
+        There is no upsert: posting the same clone twice creates two volumes.
+        Callers gate on what the target project already contains.
+
+        Args:
+            volume_id: Volume to clone.
+            project_id: Target project (requires project admin).
+            name: Name of the clone; the original name when omitted.
+            only_files: File IDs to clone; every file when omitted.
+            clone_annotations: Carry the annotations over.
+            clone_file_labels: Carry the image/video labels over.
+
+        Returns:
+            The created volume object.
+        """
+        body = {
+            "clone_annotations": clone_annotations,
+            "clone_file_labels": clone_file_labels,
+        }
+        if name is not None:
+            body["name"] = name
+        if only_files is not None:
+            body["only_files"] = list(only_files)
+        return self.post(
+            "volumes/{}/clone-to/{}".format(volume_id, project_id), json=body
+        ).json()
+
+    def store_video_annotation(self, video_id, shape_id, label_id, frames, points):
+        """Create one video annotation on a video.
+
+        There is no bulk endpoint for video annotations -- unlike image
+        annotations, which post 100 at a time -- so a split's worth of boxes is
+        one request each. There is no upsert either: posting the same annotation
+        twice creates two of them, so callers gate on what the video already holds.
+
+        A video annotation carries **no confidence**. The image-annotation
+        endpoint takes one and ``upload_refined_to_biigle.py`` leans on it to mark
+        the unverified boxes; here the label is the only channel provenance has.
+
+        Args:
+            video_id: Video the annotation belongs to.
+            shape_id: Shape ID (5 is Rectangle; resolve it via ``shapes()``).
+            label_id: Initial label, from a tree used by one of the video's projects.
+            frames: Key frame times in seconds, one per entry of ``points``.
+            points: One flat ``[x1, y1, x2, y2, ...]`` array *per key frame*, in
+                pixels. A rectangle's entry is its four vertices in order.
+
+        Returns:
+            The created annotation object.
+        """
+        if len(frames) != len(points):
+            raise ValueError(
+                "a video annotation needs one points array per key frame, "
+                "got {} frame(s) and {} points array(s)".format(len(frames), len(points))
+            )
+        body = {
+            "shape_id": shape_id,
+            "label_id": label_id,
+            "frames": list(frames),
+            "points": [list(p) for p in points],
+        }
+        return self.post("videos/{}/annotations".format(video_id), json=body).json()
+
     def image_info(self, image_id):
         """Return an image object; ``attrs`` carries ``width``/``height``."""
         return self.get("images/{}".format(image_id)).json()
@@ -192,6 +275,26 @@ class BiigleApi(object):
         return self.post(
             "projects/{}/label-trees".format(project_id), json={"id": tree_id}
         )
+
+    def authorize_project_for_label_tree(self, tree_id, project_id):
+        """Let a project use a *private* label tree.
+
+        A public tree can be attached to any project outright; a private one has
+        to authorize the project first, or ``attach_label_tree`` comes back with
+        "The project is not allowed to use this label tree." There is no GET for
+        the authorized projects, so this is idempotent by tolerating the
+        validation error a second authorization raises.
+        """
+        try:
+            return self.post(
+                "label-trees/{}/authorized-projects".format(tree_id),
+                json={"id": project_id},
+            )
+        except Exception as error:
+            message = str(error.args[0] if error.args else error).lower()
+            if "already" in message or "taken" in message:
+                return None
+            raise
 
     def create_label_tree(self, name, visibility_id=2, project_id=None, description=None):
         """Create a label tree; ``project_id`` attaches it in the same call.
