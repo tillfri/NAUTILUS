@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-API_URL="http://127.0.0.1:8000/v1/chat/completions"
-MODEL="Qwen/Qwen3.5-9B"
+API_BASE="http://127.0.0.1:8000/v1"
+API_URL="$API_BASE/chat/completions"
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MESSAGES_FILE="$DIR/qwen_messages.json"
+
+MODEL=$(curl -s "$API_BASE/models" | jq -r '.data[0].id // empty')
+if [[ -z "$MODEL" ]]; then
+  echo "Could not determine hosted model from $API_BASE/models" >&2
+  exit 1
+fi
 
 if [[ ! -f "$MESSAGES_FILE" ]] || [[ "${1:-}" == "--reset" ]]; then
   echo "[]" > "$MESSAGES_FILE"
