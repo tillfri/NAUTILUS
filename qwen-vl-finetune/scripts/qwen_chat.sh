@@ -64,7 +64,8 @@ while true; do
     continue
   fi
 
-  echo "qwen> $reply"
+  echo "qwen>"
+  echo "$reply" | glow -
 
   jq --arg content "$reply" '. + [{"role":"assistant","content":$content}]' \
     "$MESSAGES_FILE" > "$MESSAGES_FILE.tmp" && mv "$MESSAGES_FILE.tmp" "$MESSAGES_FILE"
