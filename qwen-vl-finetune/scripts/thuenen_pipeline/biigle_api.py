@@ -138,6 +138,19 @@ class BiigleApi(object):
             return response
         raise last_error if last_error else requests.HTTPError("POST failed: " + url)
 
+    def delete(self, path, **kwargs):
+        """Perform a DELETE against the API, raising on non-ok responses.
+
+        Mirror of ``get``: a 422 is a validation error whose body says what was
+        wrong, and that message is worth more than a bare ``HTTPError``.
+        """
+        response = self.session.delete("{}/{}".format(self.base_url, path.lstrip("/")), **kwargs)
+        if response.status_code == 422:
+            body = response.json()
+            raise Exception(body.get("message"), body.get("errors"))
+        response.raise_for_status()
+        return response
+
     def whoami(self):
         """Return the authenticated user object (cheap credential check)."""
         return self.get("users/my").json()
@@ -145,6 +158,33 @@ class BiigleApi(object):
     def project_volumes(self, project_id):
         """Return the volume objects of a project."""
         return self.get("projects/{}/volumes".format(project_id)).json()
+
+    def create_project(self, name, description=None):
+        """Create a project owned by the authenticated user."""
+        body = {"name": name}
+        if description is not None:
+            body["description"] = description
+        return self.post("projects", json=body).json()
+
+    def attach_project_volume(self, project_id, volume_id):
+        """Add an existing volume to a *second* project.
+
+        A volume may belong to several projects at once. That is the first half
+        of retiring a volume without destroying it: attach it somewhere else,
+        then detach it from the project that should no longer show it.
+        """
+        return self.post("projects/{}/volumes/{}".format(project_id, volume_id))
+
+    def detach_project_volume(self, project_id, volume_id):
+        """Remove a volume from a project *without* deleting it.
+
+        There is no ``DELETE volumes/:id``; deletion is this endpoint with
+        ``force=true``, which BIIGLE applies when the project is the volume's
+        last one. Without ``force`` the request fails instead of destroying
+        anything -- exactly the safety this is used for, so ``force`` is
+        deliberately not exposed.
+        """
+        return self.delete("projects/{}/volumes/{}".format(project_id, volume_id))
 
     def volume_files(self, volume_id):
         """Return the file IDs of a volume (the API returns bare integer IDs)."""
