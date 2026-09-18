@@ -158,12 +158,50 @@ _QUOTA_MARKERS = (
     "out of credits",
     "insufficient credit",
     "upgrade to increase your usage limit",
+    # What the CLI actually said when the 27 Aug run died: exit 1,
+    # subtype=success, api_error_status=429, result="You've hit your session
+    # limit - resets 3:40am (UTC)". None of the markers above match it.
+    "hit your session limit",
+    "session limit reached",
 )
 
 
 def _looks_like_quota(*texts):
     blob = " ".join(t for t in texts if t).lower()
     return any(marker in blob for marker in _QUOTA_MARKERS)
+
+
+def _envelope_fields(stdout):
+    """The diagnostic fields of a result envelope, or None if stdout is not one."""
+    try:
+        envelope = json.loads(stdout)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    return envelope if isinstance(envelope, dict) else None
+
+
+def _is_dead_envelope(envelope):
+    """True when the CLI exited non-zero without ever reaching the API.
+
+    The 27 Aug 2026 full-split run lost 560 images to a usage limit whose
+    wording matched none of ``_QUOTA_MARKERS``: every failure came back as
+    exit 1 with a well-formed envelope reporting ``duration_api_ms: 0``,
+    ``total_cost_usd: 0`` and an all-zero ``usage`` block -- i.e. the request
+    was refused locally, before any token was spent. Whatever the message, a
+    run in that state will not recover by retrying the next image, so it is
+    treated like an exhausted quota: stop cleanly and leave the remaining
+    stems for the next resume.
+    """
+    if envelope is None:
+        return False
+    if envelope.get("duration_api_ms") or envelope.get("total_cost_usd"):
+        return False
+    usage = envelope.get("usage") or {}
+    counters = ("input_tokens", "output_tokens",
+                "cache_read_input_tokens", "cache_creation_input_tokens")
+    if not any(key in usage for key in counters):
+        return False
+    return not any(usage.get(key) for key in counters)
 
 
 def build_command(task_prompt, image_path, model, max_budget_usd):
@@ -192,6 +230,7 @@ def invoke_claude(cmd, cwd, timeout):
     try:
         proc = subprocess.run(
             cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout,
+            stdin=subprocess.DEVNULL,
         )
     except subprocess.TimeoutExpired as error:
         raise ClaudeError("timed out after {}s".format(timeout)) from error
@@ -199,6 +238,16 @@ def invoke_claude(cmd, cwd, timeout):
     if proc.returncode != 0:
         if _looks_like_quota(proc.stderr, proc.stdout):
             raise QuotaExhausted((proc.stderr or proc.stdout or "").strip()[:300])
+        envelope = _envelope_fields(proc.stdout)
+        if envelope is not None:
+            # Report what the envelope says went wrong rather than its first
+            # 500 characters, which are all usage counters.
+            detail = "exit {} subtype={} api_error_status={} result={}".format(
+                proc.returncode, envelope.get("subtype"),
+                envelope.get("api_error_status"), str(envelope.get("result"))[:300])
+            if _is_dead_envelope(envelope):
+                raise QuotaExhausted("no API call was made -- {}".format(detail))
+            raise ClaudeError(detail)
         raise ClaudeError(
             "exit {}: {}".format(proc.returncode, (proc.stderr or proc.stdout or "").strip()[:500])
         )

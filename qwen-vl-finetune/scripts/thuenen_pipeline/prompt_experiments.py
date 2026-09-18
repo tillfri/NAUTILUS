@@ -494,7 +494,8 @@ def build_inputs(processor, messages):
     return text, inputs
 
 
-def run_messages(model, processor, spec, ctx, exemplars, query_path, max_new_tokens):
+def run_messages(model, processor, spec, ctx, exemplars, query_path, max_new_tokens,
+                 double_tokens=True):
     """Generate for one query image, exemplar boxes rescaled per exemplar.
 
     Every image in a multi-image message is resized independently, and the model
@@ -506,6 +507,12 @@ def run_messages(model, processor, spec, ctx, exemplars, query_path, max_new_tok
 
     Two passes, mirroring ``infer_fewshot.py:192-207``. The grids depend only on the
     images and the pixel budgets, never on the text, so the second pass is exact.
+
+    ``double_tokens`` is a property of the *model*, not of the prompt: NAUTILUS' VFE
+    branch emits two feature vectors per patch, so every image placeholder has to be
+    duplicated to match. Stock Qwen2.5-VL emits one, and doubling there would raise a
+    features/placeholders mismatch. It stays ``True`` for every NAUTILUS caller, so
+    their inputs are unchanged.
 
     Returns:
         ``(response_text, input_height, input_width, prompt_tokens, rendered_text)``
@@ -538,8 +545,9 @@ def run_messages(model, processor, spec, ctx, exemplars, query_path, max_new_tok
     input_height = grids[-1][1].item() * 14
     input_width = grids[-1][2].item() * 14
 
-    inputs["input_ids"], inputs["attention_mask"] = double_image_tokens(
-        inputs, image_token_id)
+    if double_tokens:
+        inputs["input_ids"], inputs["attention_mask"] = double_image_tokens(
+            inputs, image_token_id)
     prompt_tokens = int(inputs["input_ids"].shape[1])
     inputs = inputs.to(model.device)
 
