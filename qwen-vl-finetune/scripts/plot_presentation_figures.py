@@ -18,6 +18,11 @@ published tables in ``masterarbeit/thuenen-scaling-experiment.md`` and
                          (< 1) from models that learned the annotation UI (> 1).
     box_convention.png   why: predicted box area vs. GT, and the share of exactly
                          square boxes climbing toward the GT's 24.9%.
+    density_frontier.png recall vs. boxes-per-image. Megalodon's confidence sweep is
+                         the achievable frontier; NAUTILUS, Claude Sonnet 5 and stock
+                         Qwen2.5-VL emit no scores, so each is a single point read
+                         against the frontier at its *own* box density. The first three
+                         land on it (delta <= 0.02); the base model lands far below it.
     init_comparison.png  COCO- vs. Megalodon-initialised YOLOv8x at 1280. The marine
                          prior is worth ~2.6x the training data at 32-64 images per
                          class and nothing at either end — and it does not move the
@@ -58,8 +63,12 @@ from matplotlib.patches import Patch
 YOLO = "#2a78d6"  # slot 1, blue    — supervised YOLOv8m
 NAUT = "#eb6834"  # slot 2, orange  — NAUTILUS zero-shot
 MEGA = "#1baf7a"  # slot 3, aqua    — frozen FathomNet Megalodon
+CLAUDE = "#7c4dd6"  # slot 4, violet — Claude Sonnet 5, general frontier VLM
+QWENB = "#44464d"   # slot 5, neutral — stock Qwen2.5-VL, NAUTILUS' own base model
 # MEGA sits at 2.74:1 on the light surface, below the 3:1 bar, so every figure
 # that uses it carries visible direct labels (the skill's relief rule).
+# QWENB is deliberately achromatic: it is the reference the others are read against,
+# and it is the one series that must never be confused with a marine model.
 
 SURFACE = "#fcfcfb"
 INK = "#0b0b0b"
@@ -103,7 +112,9 @@ plt.rcParams.update({
 
 def load_runs(runs_dir: Path) -> dict:
     """Read every localization.json this deck needs, keyed by a short name."""
-    wanted = {"nautilus": "thuenen_zeroshot"}
+    wanted = {"nautilus": "thuenen_zeroshot",
+              "claude": "thuenen_claude_sonnet5",
+              "qwen": "qwen_baseline/P0_baseline"}
     wanted.update({f"yolo_{b}": f"thuenen_yolo_n{b}_s0" for b in BUDGETS})
     wanted.update({f"mega_{c}": f"thuenen_megalodon_i1280_c{c}" for c in MEGA_CONFS})
 
@@ -536,6 +547,128 @@ def plot_init_comparison(runs: dict, out: Path, arms: dict) -> None:
 
 # --- verification printout ----------------------------------------------------
 
+# --- plot 6: the density frontier ---------------------------------------------
+
+def density(run: dict) -> float:
+    return run["pred_boxes"]["boxes_per_image"]
+
+
+def mega_at_density(runs: dict, x: float) -> tuple[float, bool]:
+    """Megalodon's centre-in-box recall at box density ``x``.
+
+    Returns ``(recall, extrapolated)``. The sweep is monotone in density, so this
+    is a plain linear interpolation between the two bracketing confidences; below
+    the sweep's lowest point (0.86 box/img at conf 0.60) it extrapolates from the
+    two lowest points and says so, which is the comparison's weak leg and is
+    labelled as such on the figure.
+    """
+    pts = sorted(((density(runs[f"mega_{c}"]),
+                   recall(runs[f"mega_{c}"], "centre_in_box")) for c in MEGA_CONFS))
+    if x < pts[0][0]:
+        (x0, y0), (x1, y1) = pts[0], pts[1]
+        return y0 + (y1 - y0) * (x - x0) / (x1 - x0), True
+    for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+        if x0 <= x <= x1:
+            return y0 + (y1 - y0) * (x - x0) / (x1 - x0), False
+    return pts[-1][1], True
+
+
+def plot_density_frontier(runs: dict, out: Path) -> None:
+    """Recall vs. box budget: the only fair way to compare scoreless detectors.
+
+    Megalodon's confidence sweep is the achievable frontier. Three
+    convention-naive models that emit *no* confidence — NAUTILUS, Claude and the
+    stock base model — are single operating points, so each is read against the
+    frontier at its own box density rather than against the others' raw recall.
+    """
+    fig, ax = plt.subplots(figsize=(11.0, 6.2))
+
+    xlo, xhi = 0.55, 3.30
+    sweep = sorted(((density(runs[f"mega_{c}"]),
+                     recall(runs[f"mega_{c}"], "centre_in_box"), c) for c in MEGA_CONFS))
+    shown = [p for p in sweep if xlo <= p[0] <= xhi]
+    sx = [p[0] for p in shown]
+    sy = [p[1] for p in shown]
+
+    ax.plot(sx, sy, "-", color=MEGA, lw=2.6, zorder=2, solid_capstyle="round")
+    ax.plot(sx, sy, "o", color=MEGA, ms=6, zorder=3,
+            markeredgecolor=SURFACE, markeredgewidth=1.4)
+
+    # Only the two ends are labelled with a confidence. The intermediate values are
+    # not part of the argument, and labelling all eight collides with the model
+    # points that sit between them — which are the thing the slide is about.
+    ax.annotate(f"conf 0.{shown[0][2][1:]}", (sx[0], sy[0]),
+                textcoords="offset points", xytext=(-6, 12), fontsize=10.5,
+                color=MEGA, ha="center", zorder=3)
+    ax.annotate(f"conf 0.{shown[-1][2][1:]}", (sx[-1], sy[-1]),
+                textcoords="offset points", xytext=(6, -6), fontsize=10.5,
+                color=MEGA, ha="left", va="top", zorder=3)
+
+    ax.annotate("Megalodon\nconfidence sweep", (sx[-1], sy[-1]),
+                textcoords="offset points", xytext=(-10, 14), fontsize=12.5,
+                color=MEGA, fontweight="bold", ha="right", zorder=4)
+
+    # The sweep runs well past the plotted window; say where it ends rather than
+    # compress four models into the left tenth of a log axis.
+    tail = sweep[-1]
+    ax.annotate(f"continues to {tail[0]:.1f} box/image at conf 0.{tail[2][1:]},\n"
+                f"recall {tail[1]:.2f} — the animals are findable",
+                (xhi, sy[-1]), textcoords="offset points", xytext=(-8, -26),
+                fontsize=10, color=MUTED, ha="right", va="top", zorder=3)
+
+    # ground-truth density, the one vertical reference that is not a model
+    ax.axvline(runs["nautilus"]["gt_boxes"]["boxes_per_image"], color=AXIS,
+               lw=1.2, ls=(0, (4, 4)), zorder=1)
+    ax.annotate("ground truth\n1.20 box/image",
+                (runs["nautilus"]["gt_boxes"]["boxes_per_image"], 0.655),
+                textcoords="offset points", xytext=(-8, 0), fontsize=10.5,
+                color=MUTED, ha="right", va="top", zorder=1)
+
+    # the three scoreless models, each with its leader down to the frontier
+    # Offsets are hand-placed: the frontier runs diagonally through the middle, so
+    # the free space is above-right of NAUTILUS, below-left of Claude, and left of
+    # stock Qwen.
+    marks = [("NAUTILUS", "nautilus", NAUT, (-14, 22), "right", "bottom"),
+             ("Claude Sonnet 5", "claude", CLAUDE, (-2, -30), "left", "top"),
+             ("stock Qwen2.5-VL", "qwen", QWENB, (-16, -10), "right", "top")]
+    for label, key, colour, offset, ha, va in marks:
+        x = density(runs[key])
+        y = recall(runs[key], "centre_in_box")
+        ref, extrap = mega_at_density(runs, x)
+        delta = y - ref
+
+        ax.plot([x, x], [min(y, ref), max(y, ref)], "-", color=colour,
+                lw=1.4, alpha=0.55, zorder=3)
+        ax.plot([x], [ref], "_", color=colour, ms=11, mew=2.0, zorder=4)
+        ax.plot([x], [y], "o", color=colour, ms=12, zorder=5,
+                markeredgecolor=SURFACE, markeredgewidth=1.6)
+
+        sign = "+" if delta >= 0 else "−"
+        note = f"{label}\n{sign}{abs(delta):.3f} vs frontier"
+        if extrap:
+            note += "\n(extrapolated)"
+        ax.annotate(note, (x, y), textcoords="offset points", xytext=offset,
+                    fontsize=12, color=colour, ha=ha, va=va,
+                    fontweight="bold", zorder=6)
+
+    style_axes(ax, ygrid=True)
+    ax.set_xlim(xlo, xhi)
+    ax.set_ylim(0.18, 0.68)
+    ax.set_xlabel("predicted boxes per image  (the budget each model spends)")
+    ax.set_ylabel("centre-in-box recall  (animals found, box size ignored)")
+
+    fig.tight_layout(rect=(0, 0, 1, 0.87))
+    fig.text(0.055, 0.955,
+             "At a matched box budget, three convention-naive models sit on one curve",
+             fontsize=16, color=INK, ha="left", va="top", fontweight="bold")
+    fig.text(0.055, 0.905,
+             "Thünen test split · 1303 frames · 1564 GT boxes · class-agnostic\n"
+             "A dash marks the frontier's recall at that model's own box density.",
+             fontsize=11, color=INK_2, ha="left", va="top", linespacing=1.5)
+    fig.savefig(out, dpi=200)
+    plt.close(fig)
+
+
 def print_checks(runs: dict) -> None:
     """Print the values the deck quotes, so a figure can be checked against the notes."""
     gt = runs["nautilus"]["gt_boxes"]
@@ -587,7 +720,8 @@ def main() -> None:
     for name, fn in [("budget_curve.png", plot_budget_curve),
                      ("iou_sweep.png", plot_iou_sweep),
                      ("convention_ratio.png", plot_convention_ratio),
-                     ("box_convention.png", plot_box_convention)]:
+                     ("box_convention.png", plot_box_convention),
+                     ("density_frontier.png", plot_density_frontier)]:
         path = args.out_dir / name
         fn(runs, path)
         print(f"wrote {path}")
