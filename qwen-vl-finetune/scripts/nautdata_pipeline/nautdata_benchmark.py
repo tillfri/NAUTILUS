@@ -36,8 +36,10 @@ default        Inference for one ``--condition`` into
                and shard metadata into ``metadata.json``.
 ``--score``    Upstream metrics per task -> ``metrics.json`` (``qwen_eval.json``'s shape).
 ``--degraded`` Grounding metrics per degraded subset -> ``metrics_degraded.json``.
-``--report``   Every scored run dir under ``--runs``: paper value, ``qwen_eval.json``,
-               each condition, deltas vs ``full`` with 95% paired bootstrap CIs.
+               Both refuse an incomplete merge unless ``--allow-incomplete``.
+``--report``   Every scored run dir under ``--runs`` with the base's question
+               selection: paper value, ``qwen_eval.json``, each condition, deltas vs
+               ``full`` with 95% paired bootstrap CIs (seeded per cell).
                Writes ``<runs>/report.{json,md}``.
 
 Usage:
@@ -55,7 +57,9 @@ Usage:
        python3 nautdata_benchmark.py --diff /workspace/runs/nautdata_benchmark/full_smoke \\
                                             /workspace/runs/nautdata_benchmark/full_smoke_noop"
 
-    # 2. one condition over the full split, one shard per GPU (resumable)
+    # 2. one condition over the full split, one shard per GPU (resumable). The log
+    #    redirect needs the runs dir to exist before python3 starts; -d hides the error.
+    docker exec nautilus-qwen mkdir -p /workspace/runs/nautdata_benchmark
     for i in 0 1 2 3; do docker exec -d nautilus-qwen bash -lc \\
       "cd /workspace/NAUTILUS/qwen-vl-finetune/scripts/nautdata_pipeline && \\
        python3 nautdata_benchmark.py --condition full --shard $i/4 --device $i \\
@@ -124,6 +128,11 @@ TABLE2 = [
                                    "Root Mean Squared Error (RMSE)"], 93.7, False),
     ("counting acc", "Counting", ["Choice Evaluation Metrics", "Accuracy"], 0.707, True),
 ]
+# The TABLE2 labels ``per_question`` decomposes (ratio of sums). Only these get a
+# bootstrap CI, and ``report`` requires every one of them to reproduce metrics.json.
+# RMSE, METEOR, CIDEr and COCO mAP are not ratios of per-question sums.
+DECOMPOSED = ("coarse acc", "fine acc", "grounding mIoU", "grounding PR@0.5",
+              "counting MAE", "counting acc")
 # Table 7, PR@0.5 per subset.
 TABLE7 = {"low-light": 0.585, "normal-light": 0.587, "green-color": 0.577,
           "blue-color": 0.592, "turbid": 0.554, "clear": 0.608}
@@ -216,6 +225,52 @@ def git_sha():
         return None
 
 
+def code_sha1():
+    """HEAD alone does not pin the code: the full runs were made at a HEAD where this
+    script was still untracked. Hash the two files that define the run instead."""
+    paths = {"nautdata_benchmark.py": os.path.abspath(__file__),
+             "vfe_ablation.py": os.path.join(SCRIPTS, "thuenen_pipeline", "vfe_ablation.py")}
+    return {name: file_sha1(path) for name, path in paths.items()}
+
+
+# Metadata keys a resumed run, and every shard of a merge, must agree on.
+IDENTITY_KEYS = ("checkpoint", "condition", "hook_noop", "test_json_sha1",
+                 "selection_sha1", "max_pixel", "max_new_tokens", "gpu_name")
+
+
+def identity_mismatch(previous, current):
+    """``[(key, previous, current)]`` for every identity key both define differently."""
+    return [(k, previous[k], current[k]) for k in IDENTITY_KEYS
+            if k in previous and k in current and previous[k] != current[k]]
+
+
+def read_metadata(out_dir):
+    path = os.path.join(out_dir, "metadata.json")
+    if not os.path.isfile(path):
+        raise SystemExit("{}: no metadata.json, run --merge first".format(out_dir))
+    with open(path, encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def require_complete(out_dir, args):
+    """Refuse to score a merge that is missing predictions, unless asked not to.
+
+    ``merge`` only flags an incomplete run; without this, ``--merge --score
+    --degraded`` would carry on and publish numbers on a partial split.
+    """
+    meta = read_metadata(out_dir)
+    n, expected = meta.get("n_predictions"), meta.get("selection_n")
+    if n != expected and not args.allow_incomplete:
+        raise SystemExit("{}: {} of {} predictions; finish inference or pass "
+                         "--allow-incomplete".format(out_dir, n, expected))
+    return meta
+
+
+def is_partial_by_design(meta):
+    """A ``--limit``/``--tasks`` run covers only part of each subset on purpose."""
+    return bool(meta.get("limit_per_task")) or bool(meta.get("tasks"))
+
+
 def read_jsonl(path):
     records = []
     if os.path.isfile(path):
@@ -233,8 +288,11 @@ def infer(args):
     from qwen_vl_utils import process_vision_info
     from tqdm import tqdm
 
+    import vfe_ablation
     from vfe_ablation import ConditionControl, load_model
 
+    if CONDITIONS != vfe_ablation.CONDITIONS:
+        raise SystemExit("CONDITIONS here and in vfe_ablation.py have drifted apart")
     utils = upstream()
     shard_index, shard_count = parse_shard(args.shard)
     questions = select(args, load_questions(args))
@@ -245,10 +303,21 @@ def infer(args):
     pred_path = os.path.join(out_dir, "predictions{}.jsonl".format(suffix))
     meta_path = os.path.join(out_dir, "metadata{}.json".format(suffix))
 
-    done = {record["id"] for record in read_jsonl(pred_path)}
+    # Every shard file in the dir, not only this shard's: a resume with a different
+    # shard count must not redo questions another shard file already holds (merge
+    # would then abort on the duplicate after the GPU time is spent).
+    done = set()
+    for name in os.listdir(out_dir):
+        if name.startswith("predictions") and name.endswith(".jsonl"):
+            done.update(r["id"] for r in read_jsonl(os.path.join(out_dir, name)))
+    stray = done - {q["id"] for q in questions}
+    if stray:
+        raise SystemExit("{}: {} predictions on disk lie outside this selection (a smaller "
+                         "--limit or other --tasks?); use a new --tag".format(
+                             out_dir, len(stray)))
     todo = [q for q in mine if q["id"] not in done]
     print("[{}] {} questions in shard, {} done, {} to go".format(
-        os.path.basename(out_dir), len(mine), len(done), len(todo)))
+        os.path.basename(out_dir), len(mine), len(mine) - len(todo), len(todo)))
     if not todo:
         return
 
@@ -257,16 +326,7 @@ def infer(args):
         with open(meta_path, encoding="utf-8") as handle:
             previous = json.load(handle)
 
-    model, processor = load_model(args.checkpoint, args.device, MAX_PIXEL)
-    image_processor = processor.image_processor
-    gpu_name = torch.cuda.get_device_name(model.device)
-    if previous.get("gpu_name") and previous["gpu_name"] != gpu_name:
-        raise SystemExit("{} was started on {} and would resume on {}. Greedy outputs "
-                         "differ across GPU generations.".format(
-                             out_dir, previous["gpu_name"], gpu_name))
-    if previous.get("hook_noop", args.hook_noop) != args.hook_noop:
-        raise SystemExit("{}: --hook-noop differs from the run being resumed".format(out_dir))
-
+    gpu_name = torch.cuda.get_device_name(args.device)
     metadata = {
         "checkpoint": args.checkpoint,
         "condition": args.condition,
@@ -284,6 +344,7 @@ def infer(args):
         "gpu_name": gpu_name,
         "device": "cuda:{}".format(args.device),
         "git_sha": git_sha(),
+        "code_sha1": code_sha1(),
         "torch": torch.__version__,
         "transformers": importlib.import_module("transformers").__version__,
         "known_defects": [
@@ -293,7 +354,23 @@ def infer(args):
             "were produced with."],
         "seconds": previous.get("seconds", 0.0),
     }
+    # Every metadata file already in the dir (other shards, an earlier merge) must
+    # describe the same run. The dir name carries condition + tag but not the
+    # checkpoint, so without this a new --checkpoint would append to the old file.
+    for name in sorted(os.listdir(out_dir)):
+        if name.startswith("metadata") and name.endswith(".json"):
+            with open(os.path.join(out_dir, name), encoding="utf-8") as handle:
+                clash = identity_mismatch(json.load(handle), metadata)
+            if clash:
+                raise SystemExit("{}/{} describes a different run: {}. Greedy outputs "
+                                 "would be mixed; use a new --tag.".format(
+                                     out_dir, name, clash))
+    # Written before the first question too, so a killed run still leaves the guard.
+    with open(meta_path, "w", encoding="utf-8") as handle:
+        json.dump(dict(metadata, n_written_total=len(mine) - len(todo)), handle, indent=2)
 
+    model, processor = load_model(args.checkpoint, args.device, MAX_PIXEL)
+    image_processor = processor.image_processor
     control = ConditionControl(model.visual)
     control.apply(args.condition, hook_noop=args.hook_noop)
     started = time.time()
@@ -340,7 +417,7 @@ def infer(args):
     finally:
         control.clear()
         metadata["seconds"] += time.time() - started
-        metadata["n_written_total"] = len(done) + stats["written"]
+        metadata["n_written_total"] = len(mine) - len(todo) + stats["written"]
         with open(meta_path, "w", encoding="utf-8") as handle:
             json.dump(metadata, handle, indent=2)
     print("[done] {} written, {:.2f} s/question".format(
@@ -363,15 +440,16 @@ def merge(args):
                    and f != "metadata.json")
     merged = None
     for name in metas:
+        if "predictions{}l".format(name[len("metadata"):]) not in files:
+            print("[merge] {}: {} has no predictions file, ignored".format(out_dir, name))
+            continue
         with open(os.path.join(out_dir, name), encoding="utf-8") as handle:
             payload = json.load(handle)
         if merged is None:
             merged = dict(payload, seconds=0.0, shards=[])
-        if payload["selection_sha1"] != merged["selection_sha1"]:
-            raise SystemExit("{}: shards were run on different selections".format(out_dir))
-        if payload["gpu_name"] != merged["gpu_name"]:
-            raise SystemExit("{}: shards ran on {} and {}".format(
-                out_dir, merged["gpu_name"], payload["gpu_name"]))
+        clash = identity_mismatch(merged, payload)
+        if clash:
+            raise SystemExit("{}: shards describe different runs: {}".format(out_dir, clash))
         merged["seconds"] += payload["seconds"]
         merged["shards"].append({k: payload[k] for k in ("shard", "shard_n", "device")})
     if merged is None and os.path.isfile(os.path.join(out_dir, "metadata.json")):
@@ -410,6 +488,7 @@ def questions_for(predictions, questions):
 def score(args):
     utils = upstream()
     out_dir = run_dir(args)
+    require_complete(out_dir, args)
     predictions = load_predictions(out_dir)
     questions = questions_for(predictions, load_questions(args))
     answers, truths = utils.sortbyid(predictions), utils.sortbyid(questions)
@@ -421,8 +500,9 @@ def score(args):
     with open(os.path.join(out_dir, "metrics.json"), "w", encoding="utf-8") as handle:
         json.dump(metrics, handle, indent=2)
     for label, task, path, paper, _ in TABLE2:
-        if task in metrics:
-            print("  {:<20} {:>9.4f}   paper {}".format(label, dig(metrics[task], path), paper))
+        value = dig(metrics.get(task), path)
+        if value is not None:
+            print("  {:<20} {:>9.4f}   paper {}".format(label, value, paper))
 
 
 def degraded_subsets(args):
@@ -450,6 +530,7 @@ def alias_image(path):
 def degraded(args):
     utils = upstream()
     out_dir = run_dir(args)
+    partial = is_partial_by_design(require_complete(out_dir, args))
     predictions = load_predictions(out_dir)
     grounding = [q for q in questions_for(predictions, load_questions(args))
                  if q["id"][1] == utils.task_tags["Grounding"]]
@@ -458,17 +539,19 @@ def degraded(args):
     for subset, images in degraded_subsets(args).items():
         truth = [q for q in grounding if q["image"] in images]
         answers = [pred_by_id[q["id"]] for q in truth]
+        # Checked before the empty-subset skip: a full run in which a whole subset
+        # matches nothing (a broken alias) must fail, not drop the row.
+        n_images = len({q["image"] for q in truth})
+        if n_images != len(images) and not partial:
+            raise SystemExit("[degraded] {}: {} of {} split images matched a grounding "
+                             "question".format(subset, n_images, len(images)))
         if not truth:
             print("[degraded] {}: no grounding questions in this run".format(subset))
             continue
         metrics = utils.evaluate_ground_metrics(answers, truth, score_kwargs(args))
         metrics["n_questions"] = len(truth)
-        metrics["n_images"] = len({q["image"] for q in truth})
+        metrics["n_images"] = n_images
         metrics["n_images_in_split_file"] = len(images)
-        if metrics["n_images"] != len(images) and not load_predictions_is_partial(
-                predictions, args):
-            raise SystemExit("[degraded] {}: {} of {} split images matched a grounding "
-                             "question".format(subset, metrics["n_images"], len(images)))
         result[subset] = metrics
         print("[degraded] {:<13} n={:<4} PR@0.5 {:.4f}   paper {}".format(
             subset, len(truth), metrics["Precision@0.5"], TABLE7[subset]))
@@ -476,13 +559,16 @@ def degraded(args):
         json.dump(result, h, indent=2)
 
 
-def load_predictions_is_partial(predictions, args):
-    """A ``--limit``/``--tasks`` run covers only part of each subset by design."""
-    return len(predictions) < len(load_questions(args))
-
-
 def dig(obj, path):
+    """``obj[path[0]][path[1]]...``, or ``None`` where upstream left the key out.
+
+    Upstream's counting scorer writes ``{"Error": ...}`` in place of MAE/RMSE/Accuracy
+    when a bucket is empty (a small ``--limit``, or a run that never answers with a
+    bare int), so a missing key is a legitimate outcome, not a crash.
+    """
     for key in path:
+        if not isinstance(obj, dict) or key not in obj:
+            return None
         obj = obj[key]
     return obj
 
@@ -557,8 +643,13 @@ def per_question(args, predictions, questions):
     return out
 
 
-def paired_bootstrap(base, other, cluster_of, rng):
-    """Ratio-of-sums delta ``other - base`` over shared ids, resampling images."""
+def paired_bootstrap(base, other, cluster_of, seed_key):
+    """Ratio-of-sums delta ``other - base`` over shared ids, resampling images.
+
+    Seeded per cell from ``seed_key``, so a cell's CI does not move when another run
+    dir is added or the rows are reordered (one shared generator made it do both).
+    """
+    rng = np.random.default_rng(int(sha1(seed_key)[:16], 16))
     ids = sorted(set(base) & set(other))
     clusters = defaultdict(list)
     for qid in ids:
@@ -592,8 +683,19 @@ def report(args):
     base_name = "full" + args.tag
     ordered = ([base_name] if base_name in runs else []) + \
         [n for n in runs if n != base_name]
+    metas = {name: read_metadata(runs[name]) for name in ordered}
+    # One table, one question set: a smoke or --limit dir next to the full runs would
+    # otherwise get a column, and a delta over a handful of shared ids beside it.
+    if base_name in metas:
+        selection = metas[base_name].get("selection_sha1")
+        skipped = [n for n in ordered if metas[n].get("selection_sha1") != selection]
+        for name in skipped:
+            print("[report] {}: different question selection than {}, left out".format(
+                name, base_name))
+        ordered = [n for n in ordered if n not in skipped]
 
     loaded = {}
+    gated = {}
     for name in ordered:
         with open(os.path.join(runs[name], "metrics.json"), encoding="utf-8") as handle:
             metrics = json.load(handle)
@@ -602,44 +704,51 @@ def report(args):
         if os.path.isfile(degraded_path):
             with open(degraded_path, encoding="utf-8") as handle:
                 deg = json.load(handle)
-        with open(os.path.join(runs[name], "metadata.json"), encoding="utf-8") as handle:
-            meta = json.load(handle)
         predictions = load_predictions(runs[name])
         per = per_question(args, predictions, questions_for(predictions, questions))
-        # Gate: the per-question decomposition must reproduce upstream's numbers.
+        # Gate: the per-question decomposition must reproduce upstream's numbers --
+        # for every decomposed metric upstream reports, so a label per_question
+        # silently failed to produce cannot pass by being absent.
+        gated[name] = []
         for label, task, path, _, _ in TABLE2:
-            if label in per and task in metrics:
-                n = sum(v[0] for v in per[label].values())
-                d = sum(v[1] for v in per[label].values())
-                mine, theirs = n / d if d else 0.0, dig(metrics[task], path)
-                if abs(mine - theirs) > 1e-6:
-                    raise SystemExit("{}: per-question {} = {} but metrics.json says {}"
-                                     .format(name, label, mine, theirs))
-        loaded[name] = {"metrics": metrics, "degraded": deg, "meta": meta, "per": per}
+            theirs = dig(metrics.get(task), path)
+            if label not in DECOMPOSED or theirs is None:
+                continue
+            if label not in per:
+                raise SystemExit("{}: metrics.json has {} but per_question produced no "
+                                 "entries for it".format(name, label))
+            n = sum(v[0] for v in per[label].values())
+            d = sum(v[1] for v in per[label].values())
+            mine = n / d if d else 0.0
+            if abs(mine - theirs) > 1e-6:
+                raise SystemExit("{}: per-question {} = {} but metrics.json says {}"
+                                 .format(name, label, mine, theirs))
+            gated[name].append(label)
+        loaded[name] = {"metrics": metrics, "degraded": deg, "meta": metas[name], "per": per}
 
-    rng = np.random.default_rng(0)
     rows = []
     for label, task, path, paper, higher in TABLE2:
         row = {"metric": label, "paper": paper, "higher_is_better": higher,
-               "authors_qwen_eval": dig(authors[task], path) if task in authors else None}
+               "authors_qwen_eval": dig(authors.get(task), path)}
         for name in ordered:
-            m = loaded[name]["metrics"]
-            row[name] = dig(m[task], path) if task in m else None
+            row[name] = dig(loaded[name]["metrics"].get(task), path)
             if name != base_name and base_name in loaded and label in loaded[name]["per"] \
                     and label in loaded[base_name]["per"]:
                 point, lo, hi, n = paired_bootstrap(loaded[base_name]["per"][label],
                                                     loaded[name]["per"][label],
-                                                    cluster_of, rng)
+                                                    cluster_of, label + "|" + name)
                 row[name + " delta"] = [point, lo, hi, n]
         rows.append(row)
+    subsets = degraded_subsets(args)
     for subset in DEGRADED_ORDER:
-        row = {"metric": "T7 PR@0.5 " + subset, "paper": TABLE7[subset],
+        label = "T7 PR@0.5 " + subset
+        row = {"metric": label, "paper": TABLE7[subset],
                "higher_is_better": True, "authors_qwen_eval": None}
         for name in ordered:
             deg = loaded[name]["degraded"]
             row[name] = deg[subset]["Precision@0.5"] if subset in deg else None
         if base_name in loaded:
-            images = degraded_subsets(args)[subset]
+            images = subsets[subset]
             base = {q: v for q, v in loaded[base_name]["per"].get(
                 "grounding PR@0.5", {}).items() if cluster_of[q] in images}
             for name in ordered:
@@ -648,15 +757,16 @@ def report(args):
                 other = {q: v for q, v in loaded[name]["per"].get(
                     "grounding PR@0.5", {}).items() if cluster_of[q] in images}
                 if base and other:
-                    row[name + " delta"] = list(paired_bootstrap(base, other,
-                                                                 cluster_of, rng))
+                    row[name + " delta"] = list(paired_bootstrap(
+                        base, other, cluster_of, label + "|" + name))
         rows.append(row)
 
-    payload = {"base": base_name, "runs": ordered, "rows": rows,
+    payload = {"base": base_name, "runs": ordered, "rows": rows, "gated": gated,
                "gpu": {n: loaded[n]["meta"].get("gpu_name") for n in ordered},
                "n_predictions": {n: loaded[n]["meta"].get("n_predictions") for n in ordered},
-               "bootstrap": "paired, image-cluster, {} reps, 95% percentile CI".format(
-                   BOOTSTRAP_REPS)}
+               "bootstrap": "paired, image-cluster, {} reps, 95% percentile CI, "
+                            "seeded per cell; delta = run - base in the metric's own "
+                            "units".format(BOOTSTRAP_REPS)}
     with open(os.path.join(args.runs, "report.json"), "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2)
 
@@ -665,7 +775,8 @@ def report(args):
     header = ["metric", "paper", "qwen_eval.json"] + ordered
     lines = ["| " + " | ".join(header) + " |", "|" + "---|" * len(header)]
     for row in rows:
-        cells = [row["metric"], fmt(row["paper"]), fmt(row["authors_qwen_eval"])]
+        metric = row["metric"] + ("" if row["higher_is_better"] else " (lower is better)")
+        cells = [metric, fmt(row["paper"]), fmt(row["authors_qwen_eval"])]
         for name in ordered:
             cell = fmt(row.get(name))
             delta = row.get(name + " delta")
@@ -686,11 +797,13 @@ def diff(args):
     a, b = {p["id"]: p["text"] for p in a}, {p["id"]: p["text"] for p in b}
     shared = sorted(set(a) & set(b))
     same = sum(a[i] == b[i] for i in shared)
-    print("{} shared ids, {} byte-identical, {} differ".format(
-        len(shared), same, len(shared) - same))
+    only_a, only_b = len(set(a) - set(b)), len(set(b) - set(a))
+    print("{} shared ids, {} byte-identical, {} differ; {} only in A, {} only in B".format(
+        len(shared), same, len(shared) - same, only_a, only_b))
     for qid in [i for i in shared if a[i] != b[i]][:5]:
         print("  {}:\n    A {!r}\n    B {!r}".format(qid, a[qid][:200], b[qid][:200]))
-    if same != len(shared):
+    # The hook gate: an incomplete run must not pass on the few ids it does share.
+    if same != len(shared) or only_a or only_b or not shared:
         raise SystemExit(1)
 
 
@@ -714,6 +827,8 @@ def main():
     parser.add_argument("--merge", action="store_true")
     parser.add_argument("--score", action="store_true")
     parser.add_argument("--degraded", action="store_true")
+    parser.add_argument("--allow-incomplete", action="store_true",
+                        help="--score/--degraded a merge with missing predictions")
     parser.add_argument("--report", action="store_true")
     parser.add_argument("--diff", nargs=2, metavar=("RUN_A", "RUN_B"))
     args = parser.parse_args()
