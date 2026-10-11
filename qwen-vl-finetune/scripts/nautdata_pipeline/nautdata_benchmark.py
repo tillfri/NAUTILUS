@@ -14,7 +14,12 @@ has to be:
   model sees) -- it is left in on purpose, because the numbers being reproduced were
   made with it. ``metadata.json`` says so.
 * **Scoring is the upstream ``Metric_method_dict``**, imported, not copied, with
-  ``java=True`` so METEOR (the paper's caption metric) is computed.
+  ``java=True`` so METEOR (the paper's caption metric) is computed. One input fix:
+  newlines inside a caption/VQA answer become spaces first. pycocoevalcap's METEOR
+  speaks a line protocol to its jar, so a mid-answer newline desyncs it, raises
+  while it holds its lock, and its ``__del__`` then deadlocks the scorer forever.
+  ``process_text`` already strips trailing ones, so this is a no-op for every
+  NAUTILUS run (none has a newline left after it); stock Qwen has 67.
 * **The VFE is switchable** through ``thuenen_pipeline/vfe_ablation.ConditionControl``,
   the same hooks as the Thuenen ablation, so the two ablations are one mechanism.
 * Sharding over GPUs, append-only resume, and a paired image-cluster bootstrap
@@ -656,6 +661,27 @@ def questions_for(predictions, questions):
     return [q for q in questions if q["id"] in ids]
 
 
+TEXT_TASKS = ("Image_caption", "Region_caption", "VQA")
+
+
+def flatten_newlines(task_answers):
+    """Newline runs -> one space, so METEOR's one-request-per-line protocol holds.
+
+    Returns new records (the caller's predictions are not mutated) and how many
+    changed *after* upstream's ``process_text``, i.e. how many would have reached
+    METEOR with a newline in them.
+    """
+    out, changed = [], 0
+    for answer in task_answers:
+        text = re.sub(r"[\r\n]+", " ", answer["text"])
+        if text != answer["text"]:
+            changed += re.sub(r"[\W_]+$", "", answer["text"]).strip() != \
+                re.sub(r"[\W_]+$", "", text).strip()
+            answer = dict(answer, text=text)
+        out.append(answer)
+    return out, changed
+
+
 def score(args):
     utils = upstream()
     out_dir = run_dir(args)
@@ -666,6 +692,11 @@ def score(args):
     metrics = {}
     for task, task_answers in answers.items():
         print("[score] {} ({} questions)".format(task, len(task_answers)))
+        if task in TEXT_TASKS:
+            task_answers, flattened = flatten_newlines(task_answers)
+            if flattened:
+                print("[score] {}: {} answers had newlines, joined with spaces "
+                      "for METEOR".format(task, flattened))
         try:
             metrics[task] = utils.Metric_method_dict[task](task_answers, truths[task],
                                                             score_kwargs(args))
