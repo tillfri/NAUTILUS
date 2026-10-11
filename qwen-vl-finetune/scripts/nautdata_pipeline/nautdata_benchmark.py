@@ -19,6 +19,16 @@ has to be:
   the same hooks as the Thuenen ablation, so the two ablations are one mechanism.
 * Sharding over GPUs, append-only resume, and a paired image-cluster bootstrap
   of every ablation against ``full``.
+* **Stock Qwen2.5-VL-7B-Instruct** (``--model qwen``, run dir ``stock_qwen<tag>``)
+  goes down the same loop, so "does the fine-tune beat its own base model" is one
+  more column. It is loaded by ``qwen_baseline.load_model`` (stock class, flash-attn
+  2, bf16, NAUTILUS' ``generation_config`` copied on so the sampler path is the same)
+  and differs in exactly two places: no ``double_image_tokens`` (one feature vector
+  per patch, not two -- ``--self-test`` proves the count) and no ``ConditionControl``
+  (no VFE; ``--condition full`` only). Prompt, ``process_vision_info`` path, tag-2/7
+  rescale, ``max_new_tokens`` and record are untouched. Stock Qwen answers in its own
+  format (fenced JSON, full sentences), which upstream's parsers mostly reject, so
+  ``--report`` adds a per-task format-adherence block next to the scores.
 
 Paper <-> upstream task names: coarse classification = ``Region_Classification``,
 fine = ``Fishnet_Classification``; grounding PR@0.5 = ``Precision@0.5``; detection
@@ -39,8 +49,17 @@ default        Inference for one ``--condition`` into
                Both refuse an incomplete merge unless ``--allow-incomplete``.
 ``--report``   Every scored run dir under ``--runs`` with the base's question
                selection: paper value, ``qwen_eval.json``, each condition, deltas vs
-               ``full`` with 95% paired bootstrap CIs (seeded per cell).
+               ``full`` with 95% paired bootstrap CIs (seeded per cell), plus format
+               adherence per task (box answers upstream parses, bare option / int /
+               letter, words per caption/VQA answer vs GT).
                Writes ``<runs>/report.{json,md}``.
+``--self-test`` CPU, no weights: one tag-7 question through both checkpoints'
+               processors -- identical text/ids/pixels, undoubled placeholders =
+               ViT tokens, doubled = 2x -- and NAUTILUS_GENERATION == the shipped
+               ``generation_config.json``.
+``--diff-subset SMALL BIG``  Every id of SMALL byte-identical in BIG: the regression
+               gate for a ``--limit`` run against a full one (``--diff`` wants
+               equal id sets and stays strict).
 
 Usage:
     # 0. smoke test: 5 questions per task, then score it
@@ -70,13 +89,42 @@ Usage:
       "cd /workspace/NAUTILUS/qwen-vl-finetune/scripts/nautdata_pipeline && \\
        python3 nautdata_benchmark.py --condition full --merge --score --degraded && \\
        python3 nautdata_benchmark.py --report"
+
+    # 4. stock Qwen2.5-VL: gates, kept out of the real runs dir (smoke dir, beta 4090)
+    docker exec nautilus-qwen bash -lc \\
+      "cd /workspace/NAUTILUS/qwen-vl-finetune/scripts/nautdata_pipeline && \\
+       R=/workspace/runs/nautdata_benchmark_smoke && \\
+       python3 nautdata_benchmark.py --self-test && \\
+       python3 nautdata_benchmark.py --condition full --limit 5 --tag _regress \\
+         --device 0 --runs \\$R && \\
+       python3 nautdata_benchmark.py --condition full --tag _regress --runs \\$R \\
+         --merge --score --degraded && \\
+       python3 nautdata_benchmark.py --diff-subset \\$R/full_regress \\
+         /workspace/runs/nautdata_benchmark/full && \\
+       python3 nautdata_benchmark.py --model qwen --limit 5 --device 0 --runs \\$R && \\
+       python3 nautdata_benchmark.py --model qwen --runs \\$R --merge --score --degraded && \\
+       python3 nautdata_benchmark.py --report --tag _regress --runs \\$R"
+
+    # 5. stock Qwen2.5-VL over the full split (beta 4090s, same GPUs as full), then
+    #    merge/score/Table 7 and the report, which picks stock_qwen up next to full
+    for i in 0 1 2 3; do docker exec -d nautilus-qwen bash -lc \\
+      "cd /workspace/NAUTILUS/qwen-vl-finetune/scripts/nautdata_pipeline && \\
+       python3 nautdata_benchmark.py --model qwen --shard $i/4 --device $i \\
+         > /workspace/runs/nautdata_benchmark/stock_qwen.shard$i.log 2>&1"; done
+    docker exec nautilus-qwen bash -lc \\
+      "cd /workspace/NAUTILUS/qwen-vl-finetune/scripts/nautdata_pipeline && \\
+       python3 nautdata_benchmark.py --model qwen --merge --score --degraded && \\
+       python3 nautdata_benchmark.py --report"
 """
 
 import argparse
+import contextlib
 import hashlib
 import importlib
+import io
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -93,6 +141,11 @@ sys.path.insert(0, EVAL_DIR)
 import numpy as np  # noqa: E402
 
 DEFAULT_CHECKPOINT = "/workspace/weights/qwen-instruct-7b-weights"
+STOCK_CHECKPOINT = "/workspace/weights/qwen2.5-vl-7b-instruct"
+# --model -> (default checkpoint, run dir stem). The stock model has no VFE, so it has
+# exactly one condition and its own dir name instead of a condition name.
+MODELS = {"nautilus": (DEFAULT_CHECKPOINT, None),
+          "qwen": (STOCK_CHECKPOINT, "stock_qwen")}
 DEFAULT_TEST_JSON = "/workspace/datasets/nautdata/nautilus-qwen-instruct-test.json"
 DEFAULT_DEGRADED_DIR = "/workspace/datasets/nautdata"
 DEFAULT_IMAGES = "/workspace/nautdata"
@@ -209,7 +262,8 @@ def select(args, questions):
 
 
 def run_dir(args):
-    return os.path.join(args.runs, args.condition + args.tag)
+    stem = MODELS[args.model][1] or args.condition
+    return os.path.join(args.runs, stem + args.tag)
 
 
 def shard_suffix(index, count):
@@ -229,12 +283,16 @@ def code_sha1():
     """HEAD alone does not pin the code: the full runs were made at a HEAD where this
     script was still untracked. Hash the two files that define the run instead."""
     paths = {"nautdata_benchmark.py": os.path.abspath(__file__),
-             "vfe_ablation.py": os.path.join(SCRIPTS, "thuenen_pipeline", "vfe_ablation.py")}
+             "vfe_ablation.py": os.path.join(SCRIPTS, "thuenen_pipeline", "vfe_ablation.py"),
+             "qwen_baseline.py": os.path.join(SCRIPTS, "thuenen_pipeline", "qwen_baseline.py")}
     return {name: file_sha1(path) for name, path in paths.items()}
 
 
-# Metadata keys a resumed run, and every shard of a merge, must agree on.
-IDENTITY_KEYS = ("checkpoint", "condition", "hook_noop", "test_json_sha1",
+# Metadata keys a resumed run, and every shard of a merge, must agree on. Runs made
+# before ``model``/``double_tokens``/``generation_applied`` existed lack them, and a
+# key only one side defines is not compared -- so those dirs stay resumable.
+IDENTITY_KEYS = ("checkpoint", "model", "double_tokens", "generation_applied",
+                 "condition", "hook_noop", "test_json_sha1",
                  "selection_sha1", "max_pixel", "max_new_tokens", "gpu_name")
 
 
@@ -283,9 +341,55 @@ def read_jsonl(path):
 
 
 # ── inference ────────────────────────────────────────────────────────────────
+def resolve_model(args):
+    """Fill the per-model checkpoint default and refuse combinations that mean nothing.
+
+    Stock Qwen has no VFE: no condition but ``full``, no hooks, and its own run dir.
+    A NAUTILUS checkpoint under ``--model qwen`` (or the reverse) would load the wrong
+    class on the right weights, so the two default paths are not interchangeable.
+    """
+    if args.checkpoint is None:
+        args.checkpoint = MODELS[args.model][0]
+    if args.model == "qwen":
+        if args.condition != "full" or args.hook_noop:
+            raise SystemExit("--model qwen has no VFE: use --condition full, no --hook-noop")
+        if os.path.realpath(args.checkpoint) == os.path.realpath(DEFAULT_CHECKPOINT):
+            raise SystemExit("--model qwen with the NAUTILUS checkpoint")
+    elif os.path.realpath(args.checkpoint) == os.path.realpath(STOCK_CHECKPOINT):
+        raise SystemExit("--model nautilus with the stock checkpoint; use --model qwen")
+
+
+def build_inputs(data, args, processor, utils):
+    """``eval4nautilus_qwen.eval_with_infer`` up to the token doubling, verbatim.
+
+    Shared by ``infer`` and ``--self-test``, so the gate checks the path that runs.
+    """
+    from qwen_vl_utils import process_vision_info
+
+    image_processor = processor.image_processor
+    image_path = os.path.join(args.images, data["image"])
+    prompt = data["conversations"][0]["value"].replace("<image>", "").strip()
+    if data["id"][1] in ["2", "7"]:
+        grid_thw, ori_w, ori_h = utils.get_grid_thw(image_processor, image_path)
+        i_height = grid_thw[1].item() * 14
+        i_width = grid_thw[2].item() * 14
+        scale_h, scale_w = i_height / ori_h, i_width / ori_w
+        prompt = utils.scale_bboxes_in_text(prompt, scale_w, scale_h)
+    messages = [{"role": "user", "content": [
+        {"type": "image", "image": image_path},
+        {"type": "text", "text": prompt}]}]
+    text = processor.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True)
+    image_inputs, video_inputs = process_vision_info(messages)
+    inputs = processor(text=[text], images=image_inputs, videos=video_inputs,
+                       padding=True, return_tensors="pt")
+    input_height = inputs["image_grid_thw"][0][1] * 14
+    input_width = inputs["image_grid_thw"][0][2] * 14
+    return prompt, text, inputs, input_height, input_width
+
+
 def infer(args):
     import torch
-    from qwen_vl_utils import process_vision_info
     from tqdm import tqdm
 
     import vfe_ablation
@@ -293,6 +397,10 @@ def infer(args):
 
     if CONDITIONS != vfe_ablation.CONDITIONS:
         raise SystemExit("CONDITIONS here and in vfe_ablation.py have drifted apart")
+    stock = args.model == "qwen"
+    if stock:
+        from qwen_baseline import NAUTILUS_GENERATION
+        from qwen_baseline import load_model as load_stock_model
     utils = upstream()
     shard_index, shard_count = parse_shard(args.shard)
     questions = select(args, load_questions(args))
@@ -329,6 +437,12 @@ def infer(args):
     gpu_name = torch.cuda.get_device_name(args.device)
     metadata = {
         "checkpoint": args.checkpoint,
+        "model": args.model,
+        # The VFE emits two feature vectors per patch; stock Qwen one (see --self-test).
+        "double_tokens": not stock,
+        # Stock Qwen gets NAUTILUS' generation_config so the sampler path is identical;
+        # NAUTILUS decodes with its checkpoint's own (null = nothing overridden).
+        "generation_applied": dict(NAUTILUS_GENERATION) if stock else None,
         "condition": args.condition,
         "hook_noop": args.hook_noop,
         "test_json": args.test_json,
@@ -369,36 +483,28 @@ def infer(args):
     with open(meta_path, "w", encoding="utf-8") as handle:
         json.dump(dict(metadata, n_written_total=len(mine) - len(todo)), handle, indent=2)
 
-    model, processor = load_model(args.checkpoint, args.device, MAX_PIXEL)
-    image_processor = processor.image_processor
-    control = ConditionControl(model.visual)
-    control.apply(args.condition, hook_noop=args.hook_noop)
+    control = None
+    if stock:
+        model, processor, applied = load_stock_model(argparse.Namespace(
+            checkpoint=args.checkpoint, device=args.device, query_max_pixels=MAX_PIXEL))
+        if applied != metadata["generation_applied"]:
+            raise SystemExit("generation overrides {} != metadata {}".format(
+                applied, metadata["generation_applied"]))
+    else:
+        model, processor = load_model(args.checkpoint, args.device, MAX_PIXEL)
+        control = ConditionControl(model.visual)
+        control.apply(args.condition, hook_noop=args.hook_noop)
     started = time.time()
     stats = Counter()
     try:
         with open(pred_path, "a", encoding="utf-8") as sink:
             for data in tqdm(todo, desc=os.path.basename(out_dir)):
                 # ── eval4nautilus_qwen.eval_with_infer, verbatim ──
-                image_path = os.path.join(args.images, data["image"])
-                prompt = data["conversations"][0]["value"].replace("<image>", "").strip()
-                if data["id"][1] in ["2", "7"]:
-                    grid_thw, ori_w, ori_h = utils.get_grid_thw(image_processor, image_path)
-                    i_height = grid_thw[1].item() * 14
-                    i_width = grid_thw[2].item() * 14
-                    scale_h, scale_w = i_height / ori_h, i_width / ori_w
-                    prompt = utils.scale_bboxes_in_text(prompt, scale_w, scale_h)
-                messages = [{"role": "user", "content": [
-                    {"type": "image", "image": image_path},
-                    {"type": "text", "text": prompt}]}]
-                text = processor.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=True)
-                image_inputs, video_inputs = process_vision_info(messages)
-                inputs = processor(text=[text], images=image_inputs, videos=video_inputs,
-                                   padding=True, return_tensors="pt")
-                input_height = inputs["image_grid_thw"][0][1] * 14
-                input_width = inputs["image_grid_thw"][0][2] * 14
-                inputs["input_ids"], inputs["attention_mask"] = utils.double_image_tokens(
-                    inputs, utils.image_token_id)
+                prompt, _text, inputs, input_height, input_width = build_inputs(
+                    data, args, processor, utils)
+                if metadata["double_tokens"]:
+                    inputs["input_ids"], inputs["attention_mask"] = \
+                        utils.double_image_tokens(inputs, utils.image_token_id)
                 inputs = inputs.to(model.device)
                 with torch.no_grad():
                     generated_ids = model.generate(**inputs, max_new_tokens=MAX_NEW_TOKENS)
@@ -415,13 +521,78 @@ def infer(args):
                 sink.flush()
                 stats["written"] += 1
     finally:
-        control.clear()
+        if control is not None:
+            control.clear()
         metadata["seconds"] += time.time() - started
         metadata["n_written_total"] = len(mine) - len(todo) + stats["written"]
         with open(meta_path, "w", encoding="utf-8") as handle:
             json.dump(metadata, handle, indent=2)
     print("[done] {} written, {:.2f} s/question".format(
         stats["written"], (time.time() - started) / max(stats["written"], 1)))
+
+
+# ── --self-test ──────────────────────────────────────────────────────────────
+def self_test(args):
+    """CPU, no weights: the stock and NAUTILUS inputs differ in the doubling only.
+
+    Builds one tag-7 question (it goes through the prompt-box rescale too) through
+    ``build_inputs`` with each checkpoint's own processor. Both must produce the same
+    chat text, ids, grid and pixels; undoubled placeholders must equal the ViT tokens
+    the LLM is handed (``t*h*w / merge**2``), doubled ones twice that. Also checks that
+    the overrides copied onto stock Qwen are NAUTILUS' ``generation_config.json``.
+    """
+    import torch
+    from transformers import AutoProcessor
+
+    from qwen_baseline import NAUTILUS_GENERATION
+
+    utils = upstream()
+    pool = [q for q in load_questions(args)
+            if q["id"][1] == utils.task_tags["Region_Classification"]]
+    data = min(pool, key=lambda q: sha1(q["id"]))
+    built = {}
+    for model, (checkpoint, _) in MODELS.items():
+        processor = AutoProcessor.from_pretrained(
+            checkpoint, min_pixels=1 * 28 * 28, max_pixels=MAX_PIXEL * 28 * 28)
+        prompt, text, inputs, _, _ = build_inputs(data, args, processor, utils)
+        built[model] = (prompt, text, inputs, processor.image_processor.merge_size)
+    failures = []
+    for part, index in (("prompt", 0), ("chat text", 1)):
+        if built["qwen"][index] != built["nautilus"][index]:
+            failures.append("{} differs between the two processors".format(part))
+    for key in ("input_ids", "image_grid_thw", "pixel_values"):
+        if not torch.equal(built["qwen"][2][key], built["nautilus"][2][key]):
+            failures.append("{} differs between the two processors".format(key))
+
+    inputs, merge_size = built["qwen"][2], built["qwen"][3]
+    grid = inputs["image_grid_thw"][0]
+    expected = int(grid[0] * grid[1] * grid[2]) // (merge_size * merge_size)
+    plain = int((inputs["input_ids"][0] == utils.image_token_id).sum())
+    doubled_ids, _ = utils.double_image_tokens(built["nautilus"][2], utils.image_token_id)
+    doubled = int((doubled_ids[0] == utils.image_token_id).sum())
+    print("{}  {}  grid {}x{}x{}  merge {}".format(
+        data["id"], data["image"], int(grid[0]), int(grid[1]), int(grid[2]), merge_size))
+    print("  ViT tokens the LLM is handed          {}".format(expected))
+    print("  placeholders, stock (no doubling)     {}".format(plain))
+    print("  placeholders, NAUTILUS (doubled)      {}".format(doubled))
+    if plain != expected:
+        failures.append("stock placeholders {} != ViT tokens {}".format(plain, expected))
+    if doubled != 2 * expected:
+        failures.append("NAUTILUS placeholders {} != 2x {}".format(doubled, expected))
+
+    with open(os.path.join(DEFAULT_CHECKPOINT, "generation_config.json"),
+              encoding="utf-8") as handle:
+        shipped = json.load(handle)
+    wrong = {k: (v, shipped.get(k)) for k, v in NAUTILUS_GENERATION.items()
+             if shipped.get(k) != v}
+    if wrong:
+        failures.append("NAUTILUS_GENERATION vs generation_config.json: {}".format(wrong))
+    for failure in failures:
+        print("  [FAIL] {}".format(failure))
+    if failures:
+        raise SystemExit(1)
+    print("  [ok] identical inputs up to the doubling; NAUTILUS_GENERATION matches the "
+          "checkpoint")
 
 
 # ── merge / score ────────────────────────────────────────────────────────────
@@ -495,8 +666,24 @@ def score(args):
     metrics = {}
     for task, task_answers in answers.items():
         print("[score] {} ({} questions)".format(task, len(task_answers)))
-        metrics[task] = utils.Metric_method_dict[task](task_answers, truths[task],
-                                                        score_kwargs(args))
+        try:
+            metrics[task] = utils.Metric_method_dict[task](task_answers, truths[task],
+                                                            score_kwargs(args))
+        except IndexError:
+            # Upstream detection hands pycocotools an empty prediction list when no
+            # answer parses (stock Qwen fences every list in ```json), and loadRes
+            # indexes [0]. Upstream grounding catches the same case and returns {};
+            # record it in upstream's counting "Error" convention instead of a number.
+            if task != "Detection":
+                raise
+            from Evaluation_pack.detection import parse_bboxes_qwen
+            with contextlib.redirect_stdout(io.StringIO()):
+                parsed = sum(parse_bboxes_qwen(a["text"]) is not None for a in task_answers)
+            metrics[task] = {"Error": "no prediction box reached COCO (pycocotools "
+                                      "loadRes on an empty list)",
+                             "n_parsed": parsed, "n_questions": len(task_answers)}
+            print("[score] Detection: {} of {} answers parse, no box scored".format(
+                parsed, len(task_answers)))
     with open(os.path.join(out_dir, "metrics.json"), "w", encoding="utf-8") as handle:
         json.dump(metrics, handle, indent=2)
     for label, task, path, paper, _ in TABLE2:
@@ -665,6 +852,96 @@ def paired_bootstrap(base, other, cluster_of, seed_key):
     return point, lo, hi, len(ids)
 
 
+# ── format adherence ─────────────────────────────────────────────────────────
+def unfence(text, unwrap_list):
+    """Strip a Markdown code fence, and with ``unwrap_list`` a JSON array's brackets.
+
+    Stock Qwen answers box requests as a fenced JSON array; NautData's GT (and
+    NAUTILUS) is bare objects, one per line, which upstream detection wraps in ``[]``
+    itself. Only for the adherence diagnostic -- the scored text is never touched.
+    """
+    body = text.strip()
+    if body.startswith("```"):
+        body = body.split("\n", 1)[1] if "\n" in body else ""
+        if body.rstrip().endswith("```"):
+            body = body.rstrip()[:-3]
+        body = body.strip()
+    if unwrap_list and body.startswith("[") and body.endswith("]"):
+        body = body[1:-1].strip()
+    return body
+
+
+def adherence(predictions, questions):
+    """``[(task, measure, gt value or None, run value, n)]``: does the answer have the
+    shape upstream's scorer can use?
+
+    A model that answers right in the wrong shape scores as wrong, and stock Qwen
+    was never trained on NautData's answer formats. "Parsed" uses upstream's own
+    parsers (grounding's falls back to a ``[0, 0, 0, 0]`` box on any exception, which
+    is what it scores, so that sentinel counts as rejected). Captions and VQA have no
+    format to fail, but CIDEr punishes length, so their row is words per answer.
+    """
+    from Evaluation_pack import detection as up_detection
+    from Evaluation_pack import grounding as up_grounding
+
+    tags = upstream().task_tags
+    q_by_id = {q["id"]: q for q in questions}
+    by_tag = defaultdict(list)
+    for pred in predictions:
+        by_tag[pred["id"][1]].append(pred)
+    share = lambda hits: (sum(hits) / len(hits), len(hits)) if hits else (None, 0)  # noqa: E731
+    rows = []
+    ground_ok = lambda g: g is not None and g["default"] != [[0.0, 0.0, 0.0, 0.0]]  # noqa: E731
+    with contextlib.redirect_stdout(io.StringIO()):  # upstream prints every rejection
+        for task, parse, accepted, unwrap in (
+                ("Grounding", up_grounding.parse_bboxes_qwen, ground_ok, False),
+                ("Detection", up_detection.parse_bboxes_qwen, lambda d: d is not None, True)):
+            texts = [p["text"] for p in by_tag[tags[task]]]
+            rows.append((task, "parsed by upstream", None) + share(
+                [accepted(parse(t)) for t in texts]))
+            # Diagnostic only, never scored: how much of the failure is the fence.
+            rows.append((task, "parsed once unfenced", None) + share(
+                [accepted(parse(unfence(t, unwrap))) for t in texts]))
+    for task in ("Region_Classification", "Fishnet_Classification"):
+        hits, several = [], []
+        for pred in by_tag[tags[task]]:
+            offered = q_by_id[pred["id"]]["conversations"][0]["value"].split(
+                "as the answer:")[-1]
+            options = {o.strip().lower().rstrip(".") for o in offered.split(",")}
+            guess = pred["text"].strip().lower()
+            hits.append(guess.rstrip(".") in options)
+            # Upstream scores ``truth in guess``: an answer naming several options
+            # is credited if any of them is right. Whole words, so "human divers"
+            # is one option, not also "diver", and "starfish" is not "fish".
+            named = [o for o in options if re.search(
+                r"(?<![\w/]){}(?![\w/])".format(re.escape(o)), guess)]
+            several.append(len(named) >= 2)
+        rows.append((task, "exactly one offered option") + (None,) + share(hits))
+        rows.append((task, "names >=2 offered options") + (None,) + share(several))
+    numeric, choice = [], []
+    for pred in by_tag[tags["Counting"]]:
+        if pred["gt"].lower() in "abcd":  # upstream's own choice/numeric split
+            choice.append(pred["text"].lower() in ("a", "b", "c", "d"))
+        else:
+            try:
+                int(pred["text"].lower())
+                numeric.append(True)
+            except ValueError:
+                numeric.append(False)
+    rows.append(("Counting", "numeric: bare int", None) + share(numeric))
+    rows.append(("Counting", "choice: bare letter", None) + share(choice))
+    for task in ("Image_caption", "Region_caption", "VQA"):
+        preds = by_tag[tags[task]]
+        if not preds:
+            rows.append((task, "words per answer", None, None, 0))
+            continue
+        words = lambda s: len(s.split())  # noqa: E731
+        gt = np.mean([words(q_by_id[p["id"]]["conversations"][1]["value"]) for p in preds])
+        rows.append((task, "words per answer", float(gt),
+                     float(np.mean([words(p["text"]) for p in preds])), len(preds)))
+    return rows
+
+
 # ── report ───────────────────────────────────────────────────────────────────
 def report(args):
     questions = load_questions(args)
@@ -724,7 +1001,9 @@ def report(args):
                 raise SystemExit("{}: per-question {} = {} but metrics.json says {}"
                                  .format(name, label, mine, theirs))
             gated[name].append(label)
-        loaded[name] = {"metrics": metrics, "degraded": deg, "meta": metas[name], "per": per}
+        loaded[name] = {"metrics": metrics, "degraded": deg, "meta": metas[name], "per": per,
+                        "adherence": adherence(predictions, questions_for(predictions,
+                                                                          questions))}
 
     rows = []
     for label, task, path, paper, higher in TABLE2:
@@ -761,7 +1040,17 @@ def report(args):
                         base, other, cluster_of, label + "|" + name))
         rows.append(row)
 
-    payload = {"base": base_name, "runs": ordered, "rows": rows, "gated": gated,
+    adherence_rows = []
+    for i, (task, measure, gt, _, _) in enumerate(loaded[ordered[0]]["adherence"]):
+        row = {"task": task, "measure": measure, "gt": gt}
+        for name in ordered:
+            _, _, _, value, n = loaded[name]["adherence"][i]
+            row[name] = value
+            row[name + " n"] = n
+        adherence_rows.append(row)
+
+    payload = {"base": base_name, "runs": ordered, "rows": rows,
+               "adherence": adherence_rows, "gated": gated,
                "gpu": {n: loaded[n]["meta"].get("gpu_name") for n in ordered},
                "n_predictions": {n: loaded[n]["meta"].get("n_predictions") for n in ordered},
                "bootstrap": "paired, image-cluster, {} reps, 95% percentile CI, "
@@ -787,6 +1076,16 @@ def report(args):
     lines.append("")
     lines.append("Deltas vs `{}`: {}. n predictions: {}. GPUs: {}.".format(
         base_name, payload["bootstrap"], payload["n_predictions"], payload["gpu"]))
+    lines.append("")
+    lines.append("Format adherence (share of answers in the shape upstream's scorer "
+                 "uses; captions/VQA: words per answer vs GT):")
+    lines.append("")
+    header = ["task", "measure", "GT"] + ordered
+    lines += ["| " + " | ".join(header) + " |", "|" + "---|" * len(header)]
+    for row in adherence_rows:
+        cells = [row["task"], row["measure"], fmt(row["gt"])]
+        cells += ["{} (n={})".format(fmt(row[name]), row[name + " n"]) for name in ordered]
+        lines.append("| " + " | ".join(cells) + " |")
     with open(os.path.join(args.runs, "report.md"), "w", encoding="utf-8") as handle:
         handle.write("\n".join(lines) + "\n")
     print("\n".join(lines))
@@ -807,11 +1106,40 @@ def diff(args):
         raise SystemExit(1)
 
 
+def diff_subset(args):
+    """Regression gate: every id of the small run A, byte-identical in the big run B.
+
+    ``--diff`` demands equal id sets, which a ``--limit`` run against a full split
+    cannot meet. Here A must be non-empty and wholly contained in B; B's extra ids are
+    the point and do not count.
+    """
+    small, big = (load_predictions(d) for d in args.diff_subset)
+    small = {p["id"]: p["text"] for p in small}
+    big = {p["id"]: p["text"] for p in big}
+    missing = sorted(set(small) - set(big))
+    shared = sorted(set(small) & set(big))
+    differ = [i for i in shared if small[i] != big[i]]
+    print("{} ids in A: {} byte-identical in B, {} differ, {} missing from B".format(
+        len(small), len(shared) - len(differ), len(differ), len(missing)))
+    by_task = Counter(i[1] for i in differ)
+    if by_task:
+        print("  differing ids per task tag: {}".format(dict(sorted(by_task.items()))))
+    for qid in differ[:5]:
+        print("  {}:\n    A {!r}\n    B {!r}".format(qid, small[qid][:200], big[qid][:200]))
+    if differ or missing or not small:
+        raise SystemExit(1)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser.add_argument("--model", default="nautilus", choices=sorted(MODELS),
+                        help="qwen = stock Qwen2.5-VL-7B-Instruct, run dir stock_qwen<tag>")
     parser.add_argument("--condition", default="full", choices=CONDITIONS)
     parser.add_argument("--tag", default="", help="suffix of the run dir name")
-    parser.add_argument("--checkpoint", default=DEFAULT_CHECKPOINT)
+    parser.add_argument("--checkpoint", default=None,
+                        help="default: the --model's own ({})".format(
+                            ", ".join("{}={}".format(m, c) for m, (c, _) in
+                                      sorted(MODELS.items()))))
     parser.add_argument("--test-json", default=DEFAULT_TEST_JSON)
     parser.add_argument("--degraded-dir", default=DEFAULT_DEGRADED_DIR)
     parser.add_argument("--images", default=DEFAULT_IMAGES)
@@ -831,10 +1159,19 @@ def main():
                         help="--score/--degraded a merge with missing predictions")
     parser.add_argument("--report", action="store_true")
     parser.add_argument("--diff", nargs=2, metavar=("RUN_A", "RUN_B"))
+    parser.add_argument("--diff-subset", nargs=2, metavar=("SMALL", "BIG"),
+                        help="every id of SMALL must be byte-identical in BIG")
+    parser.add_argument("--self-test", action="store_true",
+                        help="CPU: stock vs NAUTILUS inputs differ only in the doubling")
     args = parser.parse_args()
+    resolve_model(args)
 
+    if args.self_test:
+        return self_test(args)
     if args.diff:
         return diff(args)
+    if args.diff_subset:
+        return diff_subset(args)
     if args.report:
         return report(args)
     if args.merge or args.score or args.degraded:
